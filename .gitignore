@@ -26,6 +26,7 @@ share/python-wheels/
 *.egg
 MANIFEST
 TODO.txt
+poetry.lock
 
 # Virtual environments
 .venv
