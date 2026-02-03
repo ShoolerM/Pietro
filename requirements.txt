@@ -1,0 +1,10 @@
+PyQt5
+langchain
+langchain-openai
+langchain-core
+langchain-huggingface
+langchain-text-splitters
+langchain-community
+sentence-transformers
+faiss-cpu
+numpy

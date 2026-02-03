@@ -1,0 +1,14 @@
+TASK: Create a detailed but condensed summary of this story.
+
+REQUIREMENTS:
+- List ALL main characters with their names, roles, and key personality traits
+- Describe character relationships and dynamics between them
+- Include ALL significant plot points in chronological order
+- Preserve important dialogue or quotes that define characters
+- Document world-building: locations, events, themes, etc.
+- Note any ongoing conflicts, or unresolved plot threads
+- Mention character motivations and goals
+- Include relevant backstory and historical context
+- Keep the summary detailed but aim for 30-40% of original length
+- Write in present tense, organized by topic (characters, plot, setting, etc.)
+
