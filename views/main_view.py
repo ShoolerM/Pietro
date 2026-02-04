@@ -41,6 +41,10 @@ class MainView(QtWidgets.QWidget):
     toggle_summarize_prompts_requested = QtCore.pyqtSignal()  # forwarded from story panel
     toggle_build_with_rag_requested = QtCore.pyqtSignal()  # forwarded from story panel
     auto_build_story_requested = QtCore.pyqtSignal()  # request to automatically build complete story
+    override_selection_requested = QtCore.pyqtSignal(str, int, int)  # selected_text, start_pos, end_pos
+    update_selection_with_prompt_requested = QtCore.pyqtSignal(str, int, int, str)  # selected_text, start_pos, end_pos, prompt
+    update_accepted = QtCore.pyqtSignal()  # user accepted the update
+    update_rejected = QtCore.pyqtSignal()  # user rejected the update
     
     def __init__(self):
         super().__init__()
@@ -116,6 +120,10 @@ class MainView(QtWidgets.QWidget):
         self.story_panel.toggle_summarize_prompts_requested.connect(self.toggle_summarize_prompts_requested.emit)
         self.story_panel.toggle_build_with_rag_requested.connect(self.toggle_build_with_rag_requested.emit)
         self.story_panel.auto_build_story_requested.connect(self.auto_build_story_requested.emit)
+        self.story_panel.override_selection_requested.connect(self.override_selection_requested.emit)
+        self.story_panel.update_selection_with_prompt_requested.connect(self.update_selection_with_prompt_requested.emit)
+        self.story_panel.update_accepted.connect(self.update_accepted.emit)
+        self.story_panel.update_rejected.connect(self.update_rejected.emit)
         
         # Thinking panel signals
         self.thinking_panel.font_size_changed.connect(self.font_size_changed.emit)
@@ -407,3 +415,24 @@ class MainView(QtWidgets.QWidget):
     def show_warning(self, title, message):
         """Show warning message box."""
         QtWidgets.QMessageBox.warning(self, title, message)
+    
+    def start_text_update(self, start_pos, end_pos):
+        """Initialize streaming text replacement at the given position.
+        
+        Args:
+            start_pos: Start position of text to replace
+            end_pos: End position of text to replace
+        """
+        self.story_panel.start_text_update(start_pos, end_pos)
+    
+    def stream_override_text(self, text_chunk):
+        """Stream replacement text at the update position.
+        
+        Args:
+            text_chunk: Text chunk to insert
+        """
+        self.story_panel.stream_override_text(text_chunk)
+    
+    def finish_text_update(self):
+        """Finalize the text update operation and clear formatting."""
+        self.story_panel.finish_text_update()

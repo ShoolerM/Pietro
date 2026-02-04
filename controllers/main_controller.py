@@ -78,6 +78,10 @@ class MainController:
         self.view.inference_settings_requested.connect(self._on_inference_settings_requested)
         self.view.update_summary_requested.connect(self._on_update_summary_requested)
         self.view.auto_build_story_requested.connect(self._on_auto_build_story_requested)
+        self.view.override_selection_requested.connect(self._on_override_selection)
+        self.view.update_selection_with_prompt_requested.connect(self._on_update_selection_with_prompt)
+        self.view.update_accepted.connect(self._on_update_accepted)
+        self.view.update_rejected.connect(self._on_update_rejected)
     
     def _connect_observers(self):
         """Connect model observers to update view."""
@@ -570,6 +574,135 @@ class MainController:
             self.settings_model.build_with_rag = new_val
         except Exception:
             pass
+    
+    def _on_override_selection(self, selected_text, start_pos, end_pos):
+        """Handle override selection request.
+        
+        Args:
+            selected_text: The text that was selected
+            start_pos: Start position of selection
+            end_pos: End position of selection
+        """
+        # Get current user input from control panel
+        user_input = self.view.control_panel.get_user_input().strip()
+        
+        if not user_input:
+            self.view.show_warning("No Prompt", "Please enter a prompt in the input box before overriding text.")
+            return
+        
+        # Get system prompt
+        system_prompt = self.view.prompts_panel.get_system_prompt_text()
+        
+        # Reset stop flag and enable stop button
+        self.llm_model.reset_stop_flag()
+        self.view.set_stop_enabled(True)
+        
+        # Save story to history for undo
+        current_story = self.view.get_story_content()
+        self._markdown_content = current_story
+        self.story_model.content = current_story
+        self.story_model.save_to_history()
+        
+        # Build query for text override
+        query = f"""Rewrite the following text according to the instruction.
+
+TEXT TO REWRITE:
+{selected_text}
+
+INSTRUCTION:
+{user_input}
+
+REWRITTEN VERSION (output only the rewritten text, nothing else):"""
+        
+        # Initialize streaming replacement
+        self.view.start_text_override(start_pos, end_pos)
+        
+        # Invoke LLM with streaming override
+        self.llm_controller.override_text_with_streaming(
+            query=query,
+            system_prompt=system_prompt,
+            stream_callback=self.view.stream_override_text,
+            completion_callback=self._on_update_complete,
+            set_stop_enabled_callback=self.view.set_stop_enabled
+        )
+    
+    def _on_update_selection_with_prompt(self, selected_text, start_pos, end_pos, prompt):
+        """Handle update selection request with prompt from dialog.
+        
+        Args:
+            selected_text: The text that was selected
+            start_pos: Start position of selection
+            end_pos: End position of selection
+            prompt: The change instruction from dialog
+        """
+        # Get notes from prompts panel
+        notes = self.view.prompts_panel.get_notes_text().strip()
+        
+        # Get system prompt
+        system_prompt = self.view.prompts_panel.get_system_prompt_text()
+        
+        # Reset stop flag and enable stop button
+        self.llm_model.reset_stop_flag()
+        self.view.set_stop_enabled(True)
+        self.view.set_waiting(True)
+        
+        # Save story to history for undo
+        current_story = self.view.get_story_content()
+        self._markdown_content = current_story
+        self.story_model.content = current_story
+        self.story_model.save_to_history()
+        
+        # Build query for text override with notes if available
+        query = f"""Rewrite the following text according to the instruction.
+
+TEXT TO REWRITE:
+{selected_text}
+
+INSTRUCTION:
+{prompt}"""
+        
+        if notes:
+            query += f"""
+
+ADDITIONAL CONTEXT (author's notes):
+{notes}"""
+        
+        query += """
+
+REWRITTEN VERSION (output only the rewritten text, nothing else):"""
+        
+        # Initialize streaming replacement
+        self.view.start_text_update(start_pos, end_pos)
+        
+        # Invoke LLM with streaming update
+        self.llm_controller.override_text_with_streaming(
+            query=query,
+            system_prompt=system_prompt,
+            stream_callback=self.view.stream_override_text,
+            completion_callback=self._on_update_complete,
+            set_stop_enabled_callback=self.view.set_stop_enabled
+        )
+    
+    def _on_update_complete(self):
+        """Handle completion of text update operation."""
+        # Finalize the update (show accept/reject UI)
+        self.view.finish_text_update()
+        self.view.set_waiting(False)
+        # Note: Story model will be updated when user accepts the change
+    
+    def _on_update_accepted(self):
+        """Handle user accepting the override."""
+        # Update story model with new content
+        new_story = self.view.get_story_content()
+        self._markdown_content = new_story
+        self.story_model.content = new_story
+    
+    def _on_update_rejected(self):
+        """Handle user rejecting the override."""
+        # Story text already restored by view, just sync model
+        restored_story = self.view.get_story_content()
+        self._markdown_content = restored_story
+        self.story_model.content = restored_story
     
     def _on_update_summary_requested(self):
         """Handle request to regenerate story summary after user edits.

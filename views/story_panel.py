@@ -16,6 +16,10 @@ class StoryPanel(QtWidgets.QWidget):
     toggle_summarize_prompts_requested = QtCore.pyqtSignal()  # request to toggle prompt summarization
     toggle_build_with_rag_requested = QtCore.pyqtSignal()  # request to toggle build with RAG mode
     auto_build_story_requested = QtCore.pyqtSignal()  # request to automatically build complete story
+    override_selection_requested = QtCore.pyqtSignal(str, int, int)  # selected_text, start_pos, end_pos
+    update_selection_with_prompt_requested = QtCore.pyqtSignal(str, int, int, str)  # selected_text, start_pos, end_pos, prompt
+    update_accepted = QtCore.pyqtSignal()  # user accepted the update
+    update_rejected = QtCore.pyqtSignal()  # user rejected the update
     
     def __init__(self):
         super().__init__()
@@ -32,6 +36,16 @@ class StoryPanel(QtWidgets.QWidget):
         self._summarize_prompts_enabled = True
         # Build with RAG enabled state
         self._build_with_rag_enabled = False
+        
+        # Text update state for streaming replacement
+        self._update_cursor = None
+        self._update_start_pos = None
+        self._update_end_pos = None
+        self._update_new_text_start = None  # Start position of new green text
+        self._update_new_text_end = None    # End position of new green text
+        self._update_active = False
+        self._original_text = None  # Store original text for rejection
+        self._accept_reject_widget = None  # Widget with Accept/Reject buttons
         
         self._init_ui()
     
@@ -60,6 +74,10 @@ class StoryPanel(QtWidgets.QWidget):
         # Add Ctrl+S shortcut for saving files
         self.save_shortcut = QtWidgets.QShortcut(QtGui.QKeySequence("Ctrl+S"), self)
         self.save_shortcut.activated.connect(self._save_current_file)
+        
+        # Add Ctrl+R shortcut for updating selected text
+        self.update_shortcut = QtWidgets.QShortcut(QtGui.QKeySequence("Ctrl+R"), self)
+        self.update_shortcut.activated.connect(self._on_update_selection_requested)
     
     def eventFilter(self, obj, event):
         """Event filter for font resizing with Ctrl+Wheel."""
@@ -76,6 +94,16 @@ class StoryPanel(QtWidgets.QWidget):
     def _show_context_menu(self, position):
         """Show context menu for the story text widget."""
         menu = QtWidgets.QMenu(self)
+        
+        # Check if text is selected
+        cursor = self.story_text.textCursor()
+        has_selection = cursor.hasSelection()
+        
+        # Update Selected Text action (only if text is selected)
+        if has_selection:
+            update_action = menu.addAction("✨ Update Selected Text")
+            update_action.triggered.connect(self._on_update_selection_requested)
+            menu.addSeparator()
         
         # Update Summary action
         update_summary_action = menu.addAction("🔄 Update Summary")
@@ -422,3 +450,272 @@ class StoryPanel(QtWidgets.QWidget):
         {html_content}
         """
         return styled_html
+    
+    def _on_update_selection_requested(self):
+        """Handle update selection request from context menu."""
+        cursor = self.story_text.textCursor()
+        if not cursor.hasSelection():
+            return
+        
+        selected_text = cursor.selectedText()
+        start_pos = cursor.selectionStart()
+        end_pos = cursor.selectionEnd()
+        
+        # Show dialog asking for change instructions
+        prompt = self._show_update_prompt_dialog()
+        
+        if prompt is not None:  # None means user cancelled
+            # Emit signal with selection info and prompt
+            self.update_selection_with_prompt_requested.emit(selected_text, start_pos, end_pos, prompt)
+    
+    def _show_update_prompt_dialog(self):
+        """Show dialog asking user for change instructions.
+        
+        Returns:
+            str: The prompt entered by user, or None if cancelled
+        """
+        dialog = QtWidgets.QDialog(self)
+        dialog.setWindowTitle('Update Text')
+        dialog.setMinimumWidth(400)
+        dialog.setMinimumHeight(200)
+        
+        layout = QtWidgets.QVBoxLayout()
+        
+        # Instruction label
+        label = QtWidgets.QLabel("What changes would you like to make to the selected text?")
+        layout.addWidget(label)
+        
+        # Text input
+        text_edit = QtWidgets.QTextEdit()
+        text_edit.setPlaceholderText("e.g., Make this all caps, Rewrite as a question, Add more detail...")
+        layout.addWidget(text_edit)
+        
+        # Buttons
+        button_layout = QtWidgets.QHBoxLayout()
+        update_button = QtWidgets.QPushButton("Update")
+        cancel_button = QtWidgets.QPushButton("Cancel")
+        button_layout.addStretch()
+        button_layout.addWidget(update_button)
+        button_layout.addWidget(cancel_button)
+        layout.addLayout(button_layout)
+        
+        dialog.setLayout(layout)
+        
+        result = {'prompt': None}
+        
+        def on_update():
+            prompt = text_edit.toPlainText().strip()
+            if prompt:
+                result['prompt'] = prompt
+                dialog.accept()
+            else:
+                # Show warning if empty
+                QtWidgets.QMessageBox.warning(dialog, "Empty Prompt", "Please enter change instructions.")
+        
+        update_button.clicked.connect(on_update)
+        cancel_button.clicked.connect(dialog.reject)
+        
+        # Create event filter for Enter key handling
+        class EnterKeyFilter(QtCore.QObject):
+            def eventFilter(self, obj, event):
+                if event.type() == QtCore.QEvent.KeyPress:
+                    if event.key() == QtCore.Qt.Key_Return and event.modifiers() == QtCore.Qt.NoModifier:
+                        on_update()
+                        return True
+                return False
+        
+        # Install event filter for Enter key
+        filter_obj = EnterKeyFilter()
+        text_edit.installEventFilter(filter_obj)
+        
+        text_edit.setFocus()
+        update_button.setDefault(True)
+        
+        dialog.exec_()
+        
+        return result['prompt']
+    
+    def start_text_update(self, start_pos, end_pos):
+        """Initialize streaming text replacement at the given position.
+        
+        Args:
+            start_pos: Start position of text to replace
+            end_pos: End position of text to replace
+        """
+        # Create cursor at selection and store original text
+        cursor = self.story_text.textCursor()
+        cursor.setPosition(start_pos)
+        cursor.setPosition(end_pos, QtGui.QTextCursor.KeepAnchor)
+        
+        # Store original text for potential rejection
+        self._original_text = cursor.selectedText()
+        
+        # Apply RED color to original text to show it's being replaced
+        fmt = QtGui.QTextCharFormat()
+        fmt.setForeground(QtGui.QColor(255, 100, 100))  # Red for original text
+        cursor.mergeCharFormat(fmt)
+        
+        # Position cursor after the original text
+        cursor.setPosition(end_pos)
+        
+        # Insert separator for visual distinction
+        cursor.insertText(" → ")
+        
+        # Store the position where new text will start
+        self._update_new_text_start = cursor.position()
+        
+        # Store cursor and positions for streaming new text
+        self._update_cursor = cursor
+        self._update_start_pos = start_pos
+        self._update_end_pos = end_pos
+        self._update_active = True
+    
+    def stream_override_text(self, text_chunk):
+        """Stream replacement text after the original text.
+        
+        Args:
+            text_chunk: Text chunk to insert
+        """
+        if not self._update_active or self._update_cursor is None:
+            return
+        
+        # Apply GREEN color to new text
+        fmt = QtGui.QTextCharFormat()
+        fmt.setForeground(QtGui.QColor(100, 200, 100))  # Green for new text
+        
+        # Insert text with green formatting
+        self._update_cursor.insertText(text_chunk, fmt)
+        
+        # Keep cursor at end of inserted text
+        self.story_text.setTextCursor(self._update_cursor)
+    
+    def finish_text_update(self):
+        """Finalize the text update operation and show accept/reject UI."""
+        if not self._update_active:
+            return
+        
+        # Get the end position of the new text
+        if self._update_cursor:
+            self._update_new_text_end = self._update_cursor.position()
+        
+        # Show accept/reject widget
+        self._show_accept_reject_widget()
+    
+    def _show_accept_reject_widget(self):
+        """Show accept/reject buttons for the update."""
+        # Remove existing widget if any
+        if self._accept_reject_widget:
+            self._accept_reject_widget.deleteLater()
+        
+        # Create widget with buttons
+        widget = QtWidgets.QWidget()
+        layout = QtWidgets.QHBoxLayout()
+        layout.setContentsMargins(5, 5, 5, 5)
+        
+        label = QtWidgets.QLabel("Update complete:")
+        accept_btn = QtWidgets.QPushButton("✓ Accept")
+        reject_btn = QtWidgets.QPushButton("✗ Reject")
+        
+        # Style buttons
+        accept_btn.setStyleSheet("background-color: #28a745; color: white; padding: 5px 15px;")
+        reject_btn.setStyleSheet("background-color: #dc3545; color: white; padding: 5px 15px;")
+        
+        layout.addWidget(label)
+        layout.addWidget(accept_btn)
+        layout.addWidget(reject_btn)
+        layout.addStretch()
+        
+        widget.setLayout(layout)
+        widget.setStyleSheet("background-color: #3c3c3c; border-radius: 3px;")
+        
+        # Connect buttons
+        accept_btn.clicked.connect(self._on_accept_update)
+        reject_btn.clicked.connect(self._on_reject_update)
+        
+        # Add widget to layout below story text
+        self.layout().insertWidget(1, widget)
+        self._accept_reject_widget = widget
+    
+    def _on_accept_update(self):
+        """Handle accept button click - keep green text, remove red original."""
+        # Store the length of new text before deletion
+        new_text_length = self._update_new_text_end - self._update_new_text_start
+        
+        # Remove the red original text and separator
+        if self._update_start_pos is not None and self._update_new_text_start is not None:
+            cursor = self.story_text.textCursor()
+            # Select from start to the beginning of new text (includes red original + separator)
+            cursor.setPosition(self._update_start_pos)
+            cursor.setPosition(self._update_new_text_start, QtGui.QTextCursor.KeepAnchor)
+            # Delete the red original text and separator
+            cursor.removeSelectedText()
+        
+        # Clear formatting from the new text (make it normal white)
+        # After deletion, the new text is now at _update_start_pos to _update_start_pos + new_text_length
+        if self._update_start_pos is not None and new_text_length > 0:
+            cursor = self.story_text.textCursor()
+            cursor.setPosition(self._update_start_pos)
+            cursor.setPosition(self._update_start_pos + new_text_length, QtGui.QTextCursor.KeepAnchor)
+            
+            # Reset to default white text
+            fmt = QtGui.QTextCharFormat()
+            fmt.setForeground(QtGui.QColor(255, 255, 255))  # White text
+            cursor.mergeCharFormat(fmt)
+        
+        # Remove accept/reject widget
+        if self._accept_reject_widget:
+            self._accept_reject_widget.deleteLater()
+            self._accept_reject_widget = None
+        
+        # Reset state
+        self._update_cursor = None
+        self._update_start_pos = None
+        self._update_end_pos = None
+        self._update_new_text_start = None
+        self._update_new_text_end = None
+        self._update_active = False
+        self._original_text = None
+        
+        # Emit signal
+        self.update_accepted.emit()
+    
+    def _on_reject_update(self):
+        """Handle reject button click - keep red original, remove green new text."""
+        # Remove the separator (" → ") and green new text
+        if self._update_new_text_start is not None and self._update_new_text_end is not None:
+            cursor = self.story_text.textCursor()
+            # Select from 3 chars before (the separator " → ") to end of new text
+            separator_start = self._update_new_text_start - 3
+            cursor.setPosition(separator_start)
+            cursor.setPosition(self._update_new_text_end, QtGui.QTextCursor.KeepAnchor)
+            # Delete the separator and green new text
+            cursor.removeSelectedText()
+        
+        # Clear red coloring from original text (make it normal white)
+        if self._update_start_pos is not None and self._update_new_text_start is not None:
+            cursor = self.story_text.textCursor()
+            cursor.setPosition(self._update_start_pos)
+            # Select original text (without the separator)
+            cursor.setPosition(self._update_new_text_start - 3, QtGui.QTextCursor.KeepAnchor)
+            
+            # Reset to default white text
+            fmt = QtGui.QTextCharFormat()
+            fmt.setForeground(QtGui.QColor(255, 255, 255))  # White text
+            cursor.mergeCharFormat(fmt)
+        
+        # Remove accept/reject widget
+        if self._accept_reject_widget:
+            self._accept_reject_widget.deleteLater()
+            self._accept_reject_widget = None
+        
+        # Reset state
+        self._update_cursor = None
+        self._update_start_pos = None
+        self._update_end_pos = None
+        self._update_new_text_start = None
+        self._update_new_text_end = None
+        self._update_active = False
+        self._original_text = None
+        
+        # Emit signal
+        self.update_rejected.emit()

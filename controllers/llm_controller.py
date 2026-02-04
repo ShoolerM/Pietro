@@ -231,6 +231,108 @@ class LLMController:
             except Exception:
                 pass
     
+    def override_text_with_streaming(self, query, system_prompt, stream_callback, 
+                                     completion_callback, set_stop_enabled_callback):
+        """Override selected text with streaming LLM output.
+        
+        Args:
+            query: The query with text to rewrite
+            system_prompt: Optional system prompt
+            stream_callback: Callback for each text chunk (for streaming replacement)
+            completion_callback: Callback when generation completes
+            set_stop_enabled_callback: Callback to enable/disable stop button
+        """
+        # Create signals object for thread-safe communication
+        class OverrideSignals(QtCore.QObject):
+            text_signal = QtCore.pyqtSignal(str)
+            completed_signal = QtCore.pyqtSignal()
+            set_stop_enabled_signal = QtCore.pyqtSignal(bool)
+        
+        signals = OverrideSignals()
+        
+        # Connect signals
+        signals.text_signal.connect(stream_callback, QtCore.Qt.QueuedConnection)
+        signals.completed_signal.connect(completion_callback, QtCore.Qt.QueuedConnection)
+        signals.set_stop_enabled_signal.connect(set_stop_enabled_callback, QtCore.Qt.QueuedConnection)
+        
+        # Start background thread
+        thread = threading.Thread(
+            target=self._override_thread,
+            args=(query, system_prompt, signals),
+            daemon=True
+        )
+        thread.start()
+    
+    def _override_thread(self, query, system_prompt, signals):
+        """Thread function for text override with streaming.
+        
+        Args:
+            query: The query to send to the LLM
+            system_prompt: Optional system prompt
+            signals: Signal object for thread-safe communication
+        """
+        try:
+            # Create a simple streaming handler that just emits tokens
+            class SimpleStreamingHandler(StreamingStdOutCallbackHandler):
+                def __init__(self, text_signal, stop_check):
+                    super().__init__()
+                    self.text_signal = text_signal
+                    self.stop_check = stop_check
+                    self.buffer = ""
+                
+                def on_llm_new_token(self, token: str, **kwargs) -> None:
+                    if self.stop_check and self.stop_check():
+                        raise KeyboardInterrupt("Generation stopped by user")
+                    
+                    # Buffer tokens and emit in small batches for smooth streaming
+                    self.buffer += token
+                    if len(self.buffer) >= 5:  # Emit every 5 characters
+                        self.text_signal.emit(self.buffer)
+                        self.buffer = ""
+                
+                def on_llm_end(self, *args, **kwargs) -> None:
+                    # Emit remaining buffer
+                    if self.buffer:
+                        self.text_signal.emit(self.buffer)
+                        self.buffer = ""
+            
+            streaming_handler = SimpleStreamingHandler(
+                signals.text_signal,
+                lambda: self.llm_model.stop_generation
+            )
+            
+            # Invoke LLM with streaming
+            if system_prompt:
+                messages = [
+                    SystemMessage(content=system_prompt),
+                    HumanMessage(content=query)
+                ]
+                self.llm.invoke(
+                    messages,
+                    config={"callbacks": [streaming_handler]}
+                )
+            else:
+                self.llm.invoke(
+                    query,
+                    config={"callbacks": [streaming_handler]}
+                )
+            
+            # Signal completion
+            signals.completed_signal.emit()
+            
+        except KeyboardInterrupt:
+            # User stopped generation
+            pass
+        except Exception as e:
+            # Emit error as text
+            signals.text_signal.emit(f"\n[error] {e}\n")
+        finally:
+            try:
+                # Disable stop button
+                signals.set_stop_enabled_signal.emit(False)
+            except Exception:
+                pass
+    
     def summarize_story(self, story_text, supplemental_text, append_thinking_callback):
         """Summarize the story to reduce token count.
         
