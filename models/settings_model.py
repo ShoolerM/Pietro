@@ -35,6 +35,7 @@ class SettingsModel(Observable):
         self._current_font_size = 10
         self._markdown_enabled = True
         self._summarize_prompts = True
+        self._build_with_rag = False
         self._summary_prompt_template = self.DEFAULT_SUMMARY_PROMPT
         
         # Prompt selections
@@ -45,6 +46,7 @@ class SettingsModel(Observable):
         self._load_inference_settings()
         self._load_summary_prompt()
         self._load_prompt_selections()
+        self._load_build_with_rag()
     
     @property
     def base_url(self):
@@ -144,6 +146,18 @@ class SettingsModel(Observable):
         """Enable or disable summarization of prompts."""
         self._summarize_prompts = bool(value)
         self.notify_observers('summarize_prompts_changed', self._summarize_prompts)
+    
+    @property
+    def build_with_rag(self):
+        """Check if auto-build story with RAG mode is enabled."""
+        return self._build_with_rag
+
+    @build_with_rag.setter
+    def build_with_rag(self, value):
+        """Enable or disable auto-build story with RAG mode."""
+        self._build_with_rag = bool(value)
+        self.notify_observers('build_with_rag_changed', self._build_with_rag)
+        self._save_build_with_rag()
     
     @property
     def summary_prompt_template(self):
@@ -334,3 +348,33 @@ class SettingsModel(Observable):
                     self._supplemental_file_order = []
         
         return self._supplemental_file_order.copy()
+
+    def _load_build_with_rag(self):
+        """Load build_with_rag setting from file."""
+        settings_dir = Path('settings')
+        settings_file = settings_dir / 'build_with_rag.json'
+        
+        try:
+            if settings_file.exists():
+                with open(settings_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                self._build_with_rag = data.get('enabled', False)
+                print(f"✓ Loaded build_with_rag setting: {self._build_with_rag}")
+        except Exception as e:
+            print(f"⚠ Error loading build_with_rag setting: {e}. Using default.")
+            self._build_with_rag = False
+    
+    def _save_build_with_rag(self):
+        """Save build_with_rag setting to file."""
+        settings_dir = Path('settings')
+        settings_dir.mkdir(exist_ok=True)
+        settings_file = settings_dir / 'build_with_rag.json'
+        
+        try:
+            data = {'enabled': self._build_with_rag}
+            with open(settings_file, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=2)
+            print(f"✓ Saved build_with_rag setting: {self._build_with_rag}")
+        except Exception as e:
+            print(f"⚠ Error saving build_with_rag setting: {e}")
+

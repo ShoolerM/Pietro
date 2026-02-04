@@ -39,6 +39,7 @@ class MainView(QtWidgets.QWidget):
     inference_settings_requested = QtCore.pyqtSignal()  # request to show inference settings dialog
     update_summary_requested = QtCore.pyqtSignal()  # request to regenerate story summary
     toggle_summarize_prompts_requested = QtCore.pyqtSignal()  # forwarded from story panel
+    toggle_build_with_rag_requested = QtCore.pyqtSignal()  # forwarded from story panel
     auto_build_story_requested = QtCore.pyqtSignal()  # request to automatically build complete story
     
     def __init__(self):
@@ -113,6 +114,7 @@ class MainView(QtWidgets.QWidget):
         self.story_panel.toggle_markdown_requested.connect(self._toggle_markdown)
         self.story_panel.update_summary_requested.connect(self.update_summary_requested.emit)
         self.story_panel.toggle_summarize_prompts_requested.connect(self.toggle_summarize_prompts_requested.emit)
+        self.story_panel.toggle_build_with_rag_requested.connect(self.toggle_build_with_rag_requested.emit)
         self.story_panel.auto_build_story_requested.connect(self.auto_build_story_requested.emit)
         
         # Thinking panel signals
@@ -216,6 +218,13 @@ class MainView(QtWidgets.QWidget):
         """Update the StoryPanel UI state for summarization toggle."""
         try:
             self.story_panel.set_summarize_prompts_enabled(enabled)
+        except Exception:
+            pass
+    
+    def set_build_with_rag_enabled(self, enabled: bool):
+        """Update the StoryPanel UI state for build with RAG toggle."""
+        try:
+            self.story_panel.set_build_with_rag_enabled(enabled)
         except Exception:
             pass
     

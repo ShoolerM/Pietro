@@ -14,6 +14,7 @@ class StoryPanel(QtWidgets.QWidget):
     toggle_markdown_requested = QtCore.pyqtSignal()  # request to toggle markdown
     update_summary_requested = QtCore.pyqtSignal()  # request to regenerate summary
     toggle_summarize_prompts_requested = QtCore.pyqtSignal()  # request to toggle prompt summarization
+    toggle_build_with_rag_requested = QtCore.pyqtSignal()  # request to toggle build with RAG mode
     auto_build_story_requested = QtCore.pyqtSignal()  # request to automatically build complete story
     
     def __init__(self):
@@ -29,6 +30,8 @@ class StoryPanel(QtWidgets.QWidget):
         self._thinking_visible = True
         # Summarization of prompts enabled state
         self._summarize_prompts_enabled = True
+        # Build with RAG enabled state
+        self._build_with_rag_enabled = False
         
         self._init_ui()
     
@@ -85,9 +88,10 @@ class StoryPanel(QtWidgets.QWidget):
         
         menu.addSeparator()
         
-        # Auto Build Story with RAG action
-        auto_build_action = menu.addAction("🤖 Build Story with RAG")
-        auto_build_action.triggered.connect(lambda: self.auto_build_story_requested.emit())
+        # Build with RAG toggle
+        build_rag_text = "Build with RAG: ON" if self._build_with_rag_enabled else "Build with RAG: OFF"
+        build_rag_action = menu.addAction(build_rag_text)
+        build_rag_action.triggered.connect(lambda: self.toggle_build_with_rag_requested.emit())
         
         menu.addSeparator()
         
@@ -246,6 +250,13 @@ class StoryPanel(QtWidgets.QWidget):
         This updates the label shown in the context menu next time it's opened.
         """
         self._summarize_prompts_enabled = bool(enabled)
+    
+    def set_build_with_rag_enabled(self, enabled: bool):
+        """Update internal state for whether build with RAG mode is enabled.
+
+        This updates the label shown in the context menu next time it's opened.
+        """
+        self._build_with_rag_enabled = bool(enabled)
     
     def open_file_tab(self, file_path):
         """Open a file in a new editable tab.

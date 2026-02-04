@@ -64,6 +64,7 @@ class MainController:
         self.view.model_changed.connect(self._on_model_changed)
         self.view.context_limit_changed.connect(self._on_context_limit_changed)
         self.view.toggle_summarize_prompts_requested.connect(self._on_toggle_summarize_prompts)
+        self.view.toggle_build_with_rag_requested.connect(self._on_toggle_build_with_rag)
         self.view.rag_create_database_clicked.connect(self.rag_controller.create_database)
         self.view.rag_add_files_clicked.connect(self.rag_controller.add_files_to_database)
         self.view.rag_database_toggled.connect(self.rag_controller.toggle_database)
@@ -100,6 +101,12 @@ class MainController:
             self.view.set_summarize_prompts_enabled(self.settings_model.summarize_prompts)
         except Exception:
             pass
+        
+        # Sync build with RAG toggle UI
+        try:
+            self.view.set_build_with_rag_enabled(self.settings_model.build_with_rag)
+        except Exception:
+            pass
     
     def _on_settings_changed(self, event_type, data):
         """Handle settings model changes."""
@@ -109,9 +116,15 @@ class MainController:
             # Context limit is already updated in the model
             pass
         elif event_type == 'summarize_prompts_changed':
-            # Update the story panel UI to reflect the toggle
+            # Update UI to reflect new setting
             try:
                 self.view.set_summarize_prompts_enabled(data)
+            except Exception:
+                pass
+        elif event_type == 'build_with_rag_changed':
+            # Update UI to reflect new setting
+            try:
+                self.view.set_build_with_rag_enabled(data)
             except Exception:
                 pass
     
@@ -146,6 +159,12 @@ class MainController:
             supp_text: Supplemental prompts text
             system_prompt: System prompt text
         """
+        # Check if Build with RAG mode is enabled
+        if self.settings_model.build_with_rag:
+            # Trigger auto-build story mode with the user's input and context
+            self._on_auto_build_story_requested(user_input, notes, supp_text, system_prompt)
+            return
+        
         # Reset stop flag and enable stop button
         self.llm_model.reset_stop_flag()
         self.view.set_stop_enabled(True)
@@ -544,6 +563,14 @@ class MainController:
         except Exception:
             pass
     
+    def _on_toggle_build_with_rag(self):
+        """Toggle the build with RAG setting (triggered from UI)."""
+        try:
+            new_val = not self.settings_model.build_with_rag
+            self.settings_model.build_with_rag = new_val
+        except Exception:
+            pass
+    
     def _on_update_summary_requested(self):
         """Handle request to regenerate story summary after user edits.
         
@@ -615,34 +642,47 @@ class MainController:
             self.view.set_waiting
         )
     
-    def _on_auto_build_story_requested(self):
+    def _on_auto_build_story_requested(self, initial_prompt=None, notes=None, supp_text=None, system_prompt=None):
         """Handle request to automatically build a complete story with iterative RAG and summarization.
         
         This mode:
-        1. Prompts user for an initial story prompt
+        1. Uses provided prompt or prompts user for an initial story prompt
         2. Generates story in chunks (3 paragraphs at a time)
         3. After each chunk: re-runs RAG with latest content + initial prompt
         4. Every 2-3 chunks: summarizes older content to maintain context window
         5. Continues until user stops or a reasonable story length is reached
-        """
-        # Get initial prompt from user via dialog
-        initial_prompt, ok = QtWidgets.QInputDialog.getText(
-            self.view,
-            "Auto Build Story with RAG",
-            "Enter the initial story prompt:\n(This will guide the entire story generation)",
-            QtWidgets.QLineEdit.Normal,
-            ""
-        )
         
-        if not ok or not initial_prompt.strip():
+        Args:
+            initial_prompt: Optional initial prompt. If None, prompts user via dialog.
+            notes: Optional author's notes. If None, will gather from view.
+            supp_text: Optional supplemental text. If None, will gather from view.
+            system_prompt: Optional system prompt. If None, will gather from view.
+        """
+        # Get initial prompt from parameter or user via dialog
+        if initial_prompt is None:
+            initial_prompt, ok = QtWidgets.QInputDialog.getText(
+                self.view,
+                "Auto Build Story with RAG",
+                "Enter the initial story prompt:\n(This will guide the entire story generation)",
+                QtWidgets.QLineEdit.Normal,
+                ""
+            )
+            
+            if not ok or not initial_prompt.strip():
+                return
+            
+            initial_prompt = initial_prompt.strip()
+        elif not initial_prompt.strip():
+            # If provided but empty, abort
             return
         
-        initial_prompt = initial_prompt.strip()
-        
-        # Get other context elements from view
-        notes = self.view.get_notes()
-        supp_text = self.view.get_supplemental_text()
-        system_prompt = self.view.get_system_prompt()
+        # Get other context elements - use provided values or gather from view
+        if notes is None:
+            notes = self.view.prompts_panel.get_notes_text().strip()
+        if supp_text is None:
+            supp_text = self.view.prompts_panel.gather_supplemental_text()
+        if system_prompt is None:
+            system_prompt = self.view.prompts_panel.get_system_prompt_text()
         
         # Reset stop flag and enable stop button
         self.llm_model.reset_stop_flag()
