@@ -99,10 +99,10 @@ class StoryPanel(QtWidgets.QWidget):
         self.update_shortcut = QtWidgets.QShortcut(QtGui.QKeySequence("Ctrl+R"), self)
         self.update_shortcut.activated.connect(self._on_update_selection_requested)
         
-        # Add Ctrl+F shortcut for search
+        # Add Ctrl+F shortcut for search and replace
         self.search_shortcut = QtWidgets.QShortcut(QtGui.QKeySequence("Ctrl+F"), self)
         self.search_shortcut.setContext(QtCore.Qt.WidgetWithChildrenShortcut)
-        self.search_shortcut.activated.connect(self._show_search)
+        self.search_shortcut.activated.connect(self.show_replace)
     
     def eventFilter(self, obj, event):
         """Event filter for font resizing with Ctrl+Wheel."""
@@ -123,6 +123,21 @@ class StoryPanel(QtWidgets.QWidget):
         if current_index in self.search_widgets:
             search_widget = self.search_widgets[current_index]
             search_widget.show_and_focus()
+        else:
+            # No search widget for this tab (shouldn't happen but handle gracefully)
+            pass
+    
+    def show_search(self):
+        """Public method to show search widget."""
+        self._show_search()
+    
+    def show_replace(self):
+        """Show search and replace widget for current active tab."""
+        current_index = self.tab_widget.currentIndex()
+        
+        if current_index in self.search_widgets:
+            search_widget = self.search_widgets[current_index]
+            search_widget.show_replace()
         else:
             # No search widget for this tab (shouldn't happen but handle gracefully)
             pass

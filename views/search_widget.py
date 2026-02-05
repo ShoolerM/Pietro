@@ -14,6 +14,7 @@ class SearchWidget(QtWidgets.QWidget):
         self.text_edit = text_edit
         self.current_match_index = -1
         self.matches = []
+        self.replace_mode = False
         
         self._init_ui()
         self.setFocusPolicy(QtCore.Qt.StrongFocus)
@@ -23,55 +24,81 @@ class SearchWidget(QtWidgets.QWidget):
     
     def _init_ui(self):
         """Initialize the user interface."""
-        layout = QtWidgets.QHBoxLayout()
-        layout.setContentsMargins(5, 5, 5, 5)
+        main_layout = QtWidgets.QGridLayout()
+        main_layout.setContentsMargins(5, 5, 5, 5)
+        main_layout.setSpacing(5)
         
+        # Row 0: Search
         # Search input
         self.search_input = QtWidgets.QLineEdit()
         self.search_input.setPlaceholderText("Find...")
         self.search_input.textChanged.connect(self._on_search_text_changed)
         self.search_input.returnPressed.connect(self._find_next)
-        layout.addWidget(self.search_input)
+        main_layout.addWidget(self.search_input, 0, 0)
         
         # Match counter label
         self.match_label = QtWidgets.QLabel("0/0")
         self.match_label.setMinimumWidth(50)
-        layout.addWidget(self.match_label)
+        main_layout.addWidget(self.match_label, 0, 1)
         
         # Previous button
         prev_btn = QtWidgets.QPushButton("↑")
         prev_btn.setToolTip("Previous (Shift+Enter)")
         prev_btn.setMaximumWidth(30)
         prev_btn.clicked.connect(self._find_previous)
-        layout.addWidget(prev_btn)
+        main_layout.addWidget(prev_btn, 0, 2)
         
         # Next button
         next_btn = QtWidgets.QPushButton("↓")
         next_btn.setToolTip("Next (Enter)")
         next_btn.setMaximumWidth(30)
         next_btn.clicked.connect(self._find_next)
-        layout.addWidget(next_btn)
+        main_layout.addWidget(next_btn, 0, 3)
         
         # Case sensitive checkbox
         self.case_sensitive_cb = QtWidgets.QCheckBox("Match case")
         self.case_sensitive_cb.stateChanged.connect(self._on_search_text_changed)
-        layout.addWidget(self.case_sensitive_cb)
+        main_layout.addWidget(self.case_sensitive_cb, 0, 4)
         
         # Regex checkbox
         self.regex_cb = QtWidgets.QCheckBox("Regex")
         self.regex_cb.stateChanged.connect(self._on_search_text_changed)
-        layout.addWidget(self.regex_cb)
+        main_layout.addWidget(self.regex_cb, 0, 5)
         
         # Close button
         close_btn = QtWidgets.QPushButton("✕")
         close_btn.setToolTip("Close (Esc)")
         close_btn.setMaximumWidth(30)
         close_btn.clicked.connect(self._close)
-        layout.addWidget(close_btn)
+        main_layout.addWidget(close_btn, 0, 6)
         
-        layout.addStretch()
+        # Row 1: Replace (initially hidden)
+        # Replace input
+        self.replace_input = QtWidgets.QLineEdit()
+        self.replace_input.setPlaceholderText("Replace with...")
+        main_layout.addWidget(self.replace_input, 1, 0)
         
-        self.setLayout(layout)
+        # Replace single button
+        replace_single_btn = QtWidgets.QPushButton("Replace")
+        replace_single_btn.setToolTip("Replace current (Enter)")
+        replace_single_btn.setMaximumWidth(70)
+        replace_single_btn.clicked.connect(self._replace_current)
+        main_layout.addWidget(replace_single_btn, 1, 3)
+        
+        # Replace all button
+        replace_all_btn = QtWidgets.QPushButton("Replace All")
+        replace_all_btn.setToolTip("Replace all (Ctrl+Enter)")
+        replace_all_btn.setMaximumWidth(85)
+        replace_all_btn.clicked.connect(self._replace_all)
+        main_layout.addWidget(replace_all_btn, 1, 4)
+        
+        # Store reference to replace row for showing/hiding
+        self.replace_row_index = 1
+        
+        self.setLayout(main_layout)
+        
+        # Hide replace row initially
+        self._set_replace_row_visible(False)
         
         # Style the widget
         self.setStyleSheet("""
@@ -82,8 +109,17 @@ class SearchWidget(QtWidgets.QWidget):
             }
         """)
         
-        # Install event filter on search input for Shift+Enter
+        # Install event filter on search input for Tab and other keys
         self.search_input.installEventFilter(self)
+        self.replace_input.installEventFilter(self)
+    
+    def _set_replace_row_visible(self, visible):
+        """Show or hide the replace row."""
+        layout = self.layout()
+        for col in range(layout.columnCount()):
+            item = layout.itemAtPosition(self.replace_row_index, col)
+            if item and item.widget():
+                item.widget().setVisible(visible)
     
     def eventFilter(self, obj, event):
         """Handle Shift+Enter for previous search, Esc in search input, and Esc in text edit."""
@@ -94,9 +130,29 @@ class SearchWidget(QtWidgets.QWidget):
                 if self.isVisible():
                     self._close()
                     return True
+            # Handle Tab in search input - go directly to replace input
+            elif obj == self.search_input and event.key() == QtCore.Qt.Key_Tab:
+                if self.replace_input.isVisible():
+                    self.replace_input.setFocus()
+                    return True
+            # Handle Shift+Tab in replace input - go back to search input
+            elif obj == self.replace_input and event.key() == QtCore.Qt.Key_Tab and event.modifiers() & QtCore.Qt.ShiftModifier:
+                self.search_input.setFocus()
+                return True
             # Handle Shift+Enter in search input
             elif obj == self.search_input and event.key() == QtCore.Qt.Key_Return and event.modifiers() & QtCore.Qt.ShiftModifier:
                 self._find_previous()
+                return True
+            # Handle Enter/Ctrl+Enter in replace input
+            elif obj == self.replace_input and event.key() == QtCore.Qt.Key_Return:
+                if event.modifiers() & QtCore.Qt.ControlModifier:
+                    self._replace_all()
+                else:
+                    self._replace_current()
+                return True
+            # Handle Shift+Enter in replace input to go to next match
+            elif obj == self.replace_input and event.key() == QtCore.Qt.Key_Return and event.modifiers() & QtCore.Qt.ShiftModifier:
+                self._find_next()
                 return True
         return super().eventFilter(obj, event)
     
@@ -131,7 +187,7 @@ class SearchWidget(QtWidgets.QWidget):
         """Handle search text or options change."""
         self._perform_search()
     
-    def _perform_search(self):
+    def _perform_search(self, prefer_pos=None):
         """Perform the search and highlight matches."""
         search_text = self.search_input.text()
         
@@ -185,8 +241,14 @@ class SearchWidget(QtWidgets.QWidget):
         
         # Highlight all matches
         if self.matches:
-            self._highlight_all_matches()
-            self.current_match_index = 0
+            if prefer_pos is not None:
+                self.current_match_index = 0
+                for idx, (start, end) in enumerate(self.matches):
+                    if start >= prefer_pos:
+                        self.current_match_index = idx
+                        break
+            else:
+                self.current_match_index = 0
             self._highlight_current_match()
             self._update_match_label()
         else:
@@ -194,31 +256,23 @@ class SearchWidget(QtWidgets.QWidget):
     
     def _clear_highlights(self):
         """Clear all search highlights."""
-        # Create a cursor that selects all text
-        cursor = QtGui.QTextCursor(self.text_edit.document())
-        cursor.select(QtGui.QTextCursor.Document)
-        
-        # Reset format - explicitly clear background
-        fmt = QtGui.QTextCharFormat()
-        fmt.setBackground(QtGui.QBrush())  # Clear background
-        cursor.mergeCharFormat(fmt)
-        
-        # Reset text cursor position
-        cursor = self.text_edit.textCursor()
-        cursor.clearSelection()
-        self.text_edit.setTextCursor(cursor)
+        self.text_edit.setExtraSelections([])
     
     def _highlight_all_matches(self):
         """Highlight all matches in light color."""
-        # Dimmer light yellow background for non-current matches
+        selections = []
         highlight_format = QtGui.QTextCharFormat()
         highlight_format.setBackground(QtGui.QColor(100, 100, 0, 100))  # Dimmer yellow
         
         for start, end in self.matches:
-            cursor = self.text_edit.textCursor()
+            cursor = QtGui.QTextCursor(self.text_edit.document())
             cursor.setPosition(start)
             cursor.setPosition(end, QtGui.QTextCursor.KeepAnchor)
-            cursor.mergeCharFormat(highlight_format)
+            sel = QtWidgets.QTextEdit.ExtraSelection()
+            sel.cursor = cursor
+            sel.format = highlight_format
+            selections.append(sel)
+        return selections
     
     def _highlight_current_match(self):
         """Highlight the current match more prominently."""
@@ -228,16 +282,20 @@ class SearchWidget(QtWidgets.QWidget):
         start, end = self.matches[self.current_match_index]
         
         # Re-highlight all matches first
-        self._highlight_all_matches()
+        selections = self._highlight_all_matches()
         
         # Then highlight current match with bright yellow
         current_format = QtGui.QTextCharFormat()
         current_format.setBackground(QtGui.QColor(200, 200, 0, 150))  # Bright yellow, fully opaque
         
-        cursor = self.text_edit.textCursor()
+        cursor = QtGui.QTextCursor(self.text_edit.document())
         cursor.setPosition(start)
         cursor.setPosition(end, QtGui.QTextCursor.KeepAnchor)
-        cursor.mergeCharFormat(current_format)
+        current_sel = QtWidgets.QTextEdit.ExtraSelection()
+        current_sel.cursor = cursor
+        current_sel.format = current_format
+        selections.append(current_sel)
+        self.text_edit.setExtraSelections(selections)
         
         # Scroll to the match by positioning cursor without selection
         cursor.setPosition(start)
@@ -272,5 +330,101 @@ class SearchWidget(QtWidgets.QWidget):
     def show_and_focus(self):
         """Show the widget and focus the search input."""
         self.show()
+        # Re-perform search with existing text
+        if self.search_input.text():
+            self._perform_search()
         self.search_input.setFocus()
         self.search_input.selectAll()
+    
+    def toggle_replace_mode(self):
+        """Toggle replace mode on/off."""
+        self.replace_mode = not self.replace_mode
+        if self.replace_mode:
+            self._set_replace_row_visible(True)
+            self.replace_input.setFocus()
+        else:
+            self._set_replace_row_visible(False)
+            self.search_input.setFocus()
+    
+    def show_replace(self):
+        """Show the search and replace widget."""
+        self.replace_mode = True
+        self._set_replace_row_visible(True)
+        self.show()
+        # Re-perform search with existing text
+        if self.search_input.text():
+            self._perform_search()
+        self.search_input.setFocus()
+    
+    def _replace_current(self):
+        """Replace the current match with the replacement text."""
+        if not self.matches or self.current_match_index < 0:
+            return
+        
+        start, end = self.matches[self.current_match_index]
+        replacement_text = self.replace_input.text()
+        
+        # Update document with undo block (replace only current match)
+        cursor = self.text_edit.textCursor()
+        cursor.beginEditBlock()
+        try:
+            cursor.setPosition(start)
+            cursor.setPosition(end, QtGui.QTextCursor.KeepAnchor)
+            cursor.insertText(replacement_text)
+        finally:
+            cursor.endEditBlock()
+        
+        # Re-search to update matches and position
+        next_pos = start + len(replacement_text)
+        self._perform_search(prefer_pos=next_pos)
+        
+        # Position cursor at the next match if available
+        if self.matches and self.current_match_index < len(self.matches):
+            start, end = self.matches[self.current_match_index]
+            cursor = self.text_edit.textCursor()
+            cursor.setPosition(start)
+            self.text_edit.setTextCursor(cursor)
+            self.text_edit.ensureCursorVisible()
+    
+    def _replace_all(self):
+        """Replace all matches with the replacement text."""
+        if not self.matches:
+            return
+        
+        replacement_text = self.replace_input.text()
+        search_text = self.search_input.text()
+        
+        # Get document content
+        document = self.text_edit.document()
+        content = document.toPlainText()
+        
+        # Perform replacement
+        case_sensitive = self.case_sensitive_cb.isChecked()
+        use_regex = self.regex_cb.isChecked()
+        
+        try:
+            if use_regex:
+                flags = 0 if case_sensitive else re.IGNORECASE
+                new_content = re.sub(search_text, replacement_text, content, flags=flags)
+            else:
+                if not case_sensitive:
+                    # Case-insensitive replacement
+                    new_content = content
+                    pattern = re.compile(re.escape(search_text), re.IGNORECASE)
+                    new_content = pattern.sub(replacement_text, new_content)
+                else:
+                    new_content = content.replace(search_text, replacement_text)
+        except re.error:
+            return
+        
+        # Update document with undo block
+        cursor = self.text_edit.textCursor()
+        cursor.beginEditBlock()
+        try:
+            cursor.select(QtGui.QTextCursor.Document)
+            cursor.insertText(new_content)
+        finally:
+            cursor.endEditBlock()
+        
+        # Re-search to update matches
+        self._perform_search()
