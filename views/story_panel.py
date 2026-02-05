@@ -75,6 +75,9 @@ class StoryPanel(QtWidgets.QWidget):
         self.story_text.installEventFilter(self)
         self.story_text.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
         self.story_text.customContextMenuRequested.connect(self._show_context_menu)
+        self.story_text.textChanged.connect(self._mark_story_modified)
+        self.story_file_path = None
+        self.story_modified = False
         
         story_tab_layout.addWidget(self.story_text)
         story_tab_container.setLayout(story_tab_layout)
@@ -93,6 +96,7 @@ class StoryPanel(QtWidgets.QWidget):
         
         # Add Ctrl+S shortcut for saving files
         self.save_shortcut = QtWidgets.QShortcut(QtGui.QKeySequence("Ctrl+S"), self)
+        self.save_shortcut.setContext(QtCore.Qt.WidgetWithChildrenShortcut)
         self.save_shortcut.activated.connect(self._save_current_file)
         
         # Add Ctrl+R shortcut for updating selected text
@@ -191,8 +195,12 @@ class StoryPanel(QtWidgets.QWidget):
         """Save the currently active file tab when Ctrl+S is pressed."""
         current_index = self.tab_widget.currentIndex()
         
-        # Don't try to save the Story tab (index 0)
+        # Save the Story tab (index 0)
         if current_index == 0:
+            if not self.story_file_path:
+                self.save_story_file_as()
+            else:
+                self.save_story_file()
             return
         
         # Find the file path for the current tab
@@ -230,10 +238,71 @@ class StoryPanel(QtWidgets.QWidget):
             tab_index = data['index']
             original_name = data['original_filename']
             self.tab_widget.setTabText(tab_index, original_name)
+
+    def _mark_story_modified(self):
+        """Mark story tab as modified."""
+        if not self.story_modified:
+            self.story_modified = True
+            current_label = self.tab_widget.tabText(0)
+            if not current_label.endswith(" *"):
+                self.tab_widget.setTabText(0, f"{current_label} *")
+
+    def load_story_file(self):
+        """Load a file into the story tab."""
+        file_path, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self,
+            "Open File",
+            "",
+            "Text Files (*.txt);;All Files (*)"
+        )
+        if not file_path:
+            return
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+        except Exception as e:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Error",
+                f"Could not open file:\n{e}"
+            )
+            return
+        self.story_text.blockSignals(True)
+        try:
+            self.story_text.setPlainText(content)
+        finally:
+            self.story_text.blockSignals(False)
+        self.story_file_path = file_path
+        self.story_modified = False
+        self.tab_widget.setTabText(0, QtCore.QFileInfo(file_path).fileName())
+
+    def save_story_file(self):
+        """Save story tab content. If no file is loaded, perform Save As."""
+        if not self.story_file_path:
+            self.save_story_file_as()
+            return
+        content = self.story_text.toPlainText()
+        self.file_saved.emit(self.story_file_path, content)
+        self.story_modified = False
+        self.tab_widget.setTabText(0, QtCore.QFileInfo(self.story_file_path).fileName())
+
+    def save_story_file_as(self):
+        """Save story tab content to a new file path."""
+        file_path, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self,
+            "Save File As",
+            "",
+            "Text Files (*.txt);;All Files (*)"
+        )
+        if not file_path:
+            return
+        self.story_file_path = file_path
+        self.save_story_file()
     
     def _close_tab(self, index):
         """Close a tab (but not the Story tab at index 0)."""
         if index == 0:
+            self.clear_story_file()
             return
         
         tab_widget = self.tab_widget.widget(index)
@@ -258,11 +327,11 @@ class StoryPanel(QtWidgets.QWidget):
         
         if file_to_remove:
             del self.open_file_tabs[file_to_remove]
-        
+
         # Clean up search widget for this tab
         if index in self.search_widgets:
             del self.search_widgets[index]
-        
+
         # Update search widget indices
         new_search_widgets = {}
         for idx, widget in self.search_widgets.items():
@@ -271,12 +340,23 @@ class StoryPanel(QtWidgets.QWidget):
             else:
                 new_search_widgets[idx] = widget
         self.search_widgets = new_search_widgets
-        
+
         for file_path, data in self.open_file_tabs.items():
             if data['index'] > index:
                 data['index'] -= 1
-        
+
         self.tab_widget.removeTab(index)
+
+    def clear_story_file(self):
+        """Clear the story tab to an in-memory document."""
+        self.story_text.blockSignals(True)
+        try:
+            self.story_text.clear()
+        finally:
+            self.story_text.blockSignals(False)
+        self.story_file_path = None
+        self.story_modified = False
+        self.tab_widget.setTabText(0, "Story")
     
     # Public methods
     

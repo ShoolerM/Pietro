@@ -64,6 +64,14 @@ class MainView(QtWidgets.QWidget):
         # Create menu bar
         menu_bar = QtWidgets.QMenuBar()
         file_menu = menu_bar.addMenu('File')
+        load_action = file_menu.addAction('Load...')
+        load_action.setShortcut('Ctrl+O')
+        load_action.triggered.connect(lambda: self.story_panel.load_story_file())
+        save_action = file_menu.addAction('Save')
+        save_action.triggered.connect(lambda: self.story_panel._save_current_file())
+        save_as_action = file_menu.addAction('Save As...')
+        save_as_action.triggered.connect(lambda: self.story_panel.save_story_file_as())
+        file_menu.addSeparator()
         settings_action = file_menu.addAction('Settings')
         settings_action.triggered.connect(lambda: self.settings_opened.emit())
         
