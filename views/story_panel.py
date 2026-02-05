@@ -2,6 +2,7 @@
 import os
 from PyQt5 import QtWidgets, QtCore, QtGui
 import markdown
+from views.search_widget import SearchWidget
 
 
 class StoryPanel(QtWidgets.QWidget):
@@ -47,6 +48,9 @@ class StoryPanel(QtWidgets.QWidget):
         self._original_text = None  # Store original text for rejection
         self._accept_reject_widget = None  # Widget with Accept/Reject buttons
         
+        # Search widget (created per tab)
+        self.search_widgets = {}  # Maps tab index to search widget
+        
         self._init_ui()
     
     def _init_ui(self):
@@ -60,13 +64,29 @@ class StoryPanel(QtWidgets.QWidget):
         self.tab_widget.tabCloseRequested.connect(self._close_tab)
         
         # Create the story/output tab (always first, not closeable)
+        story_tab_container = QtWidgets.QWidget()
+        story_tab_layout = QtWidgets.QVBoxLayout()
+        story_tab_layout.setContentsMargins(0, 0, 0, 0)
+        story_tab_layout.setSpacing(0)
+        
         self.story_text = QtWidgets.QTextEdit()
         self.story_text.setAcceptRichText(True)
         self.story_text.setPlaceholderText('Response output (appended as streamed output)')
         self.story_text.installEventFilter(self)
         self.story_text.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
         self.story_text.customContextMenuRequested.connect(self._show_context_menu)
-        self.tab_widget.addTab(self.story_text, "Story")
+        
+        story_tab_layout.addWidget(self.story_text)
+        story_tab_container.setLayout(story_tab_layout)
+        
+        self.tab_widget.addTab(story_tab_container, "Story")
+        
+        # Create search widget for story tab
+        story_search = SearchWidget(self.story_text, story_tab_container)
+        story_search.hide()
+        story_search.close_requested.connect(story_search.hide)
+        story_tab_layout.insertWidget(0, story_search)
+        self.search_widgets[0] = story_search
         
         layout.addWidget(self.tab_widget)
         self.setLayout(layout)
@@ -78,6 +98,11 @@ class StoryPanel(QtWidgets.QWidget):
         # Add Ctrl+R shortcut for updating selected text
         self.update_shortcut = QtWidgets.QShortcut(QtGui.QKeySequence("Ctrl+R"), self)
         self.update_shortcut.activated.connect(self._on_update_selection_requested)
+        
+        # Add Ctrl+F shortcut for search
+        self.search_shortcut = QtWidgets.QShortcut(QtGui.QKeySequence("Ctrl+F"), self)
+        self.search_shortcut.setContext(QtCore.Qt.WidgetWithChildrenShortcut)
+        self.search_shortcut.activated.connect(self._show_search)
     
     def eventFilter(self, obj, event):
         """Event filter for font resizing with Ctrl+Wheel."""
@@ -90,6 +115,17 @@ class StoryPanel(QtWidgets.QWidget):
                     self.font_size_changed.emit(-1)
                 return True
         return False
+    
+    def _show_search(self):
+        """Show search widget for current active tab."""
+        current_index = self.tab_widget.currentIndex()
+        
+        if current_index in self.search_widgets:
+            search_widget = self.search_widgets[current_index]
+            search_widget.show_and_focus()
+        else:
+            # No search widget for this tab (shouldn't happen but handle gracefully)
+            pass
     
     def _show_context_menu(self, position):
         """Show context menu for the story text widget."""
@@ -208,6 +244,19 @@ class StoryPanel(QtWidgets.QWidget):
         if file_to_remove:
             del self.open_file_tabs[file_to_remove]
         
+        # Clean up search widget for this tab
+        if index in self.search_widgets:
+            del self.search_widgets[index]
+        
+        # Update search widget indices
+        new_search_widgets = {}
+        for idx, widget in self.search_widgets.items():
+            if idx > index:
+                new_search_widgets[idx - 1] = widget
+            else:
+                new_search_widgets[idx] = widget
+        self.search_widgets = new_search_widgets
+        
         for file_path, data in self.open_file_tabs.items():
             if data['index'] > index:
                 data['index'] -= 1
@@ -322,6 +371,7 @@ class StoryPanel(QtWidgets.QWidget):
         tab_container = QtWidgets.QWidget()
         tab_layout = QtWidgets.QVBoxLayout()
         tab_layout.setContentsMargins(0, 0, 0, 0)
+        tab_layout.setSpacing(0)
         
         save_button = QtWidgets.QPushButton('Save')
         save_button.clicked.connect(lambda: self._save_file(file_path, file_editor))
@@ -337,6 +387,13 @@ class StoryPanel(QtWidgets.QWidget):
         # Add tab
         filename = os.path.basename(file_path)
         tab_index = self.tab_widget.addTab(tab_container, filename)
+        
+        # Create search widget for this file tab
+        file_search = SearchWidget(file_editor, tab_container)
+        file_search.hide()
+        file_search.close_requested.connect(file_search.hide)
+        tab_layout.insertWidget(0, file_search)
+        self.search_widgets[tab_index] = file_search
         
         # Track the tab
         self.open_file_tabs[file_path] = {

@@ -1,5 +1,6 @@
 """Thinking panel view for thinking process and notes."""
 from PyQt5 import QtWidgets, QtCore, QtGui
+from views.search_widget import SearchWidget
 
 
 class ThinkingPanel(QtWidgets.QWidget):
@@ -10,17 +11,20 @@ class ThinkingPanel(QtWidgets.QWidget):
     
     def __init__(self):
         super().__init__()
+        self.search_widget = None
         self._init_ui()
     
     def _init_ui(self):
         """Initialize the user interface."""
         layout = QtWidgets.QVBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
         
         # Thinking Process section
         thinking_container = QtWidgets.QWidget()
         thinking_container_layout = QtWidgets.QVBoxLayout()
         thinking_container_layout.setContentsMargins(0, 0, 0, 0)
+        thinking_container_layout.setSpacing(0)
         
         thinking_label = QtWidgets.QLabel('Thinking Process')
         thinking_container_layout.addWidget(thinking_label)
@@ -34,12 +38,28 @@ class ThinkingPanel(QtWidgets.QWidget):
         
         thinking_container.setLayout(thinking_container_layout)
         
+        # Create search widget
+        self.search_widget = SearchWidget(self.thinking_text, thinking_container)
+        self.search_widget.hide()
+        self.search_widget.close_requested.connect(self.search_widget.hide)
+        thinking_container_layout.insertWidget(0, self.search_widget)
+        
         layout.addWidget(thinking_container)
         self.setLayout(layout)
         
         # Set size constraints
         self.setMinimumWidth(250)
         self.setMaximumWidth(500)
+        
+        # Add Ctrl+F shortcut for search
+        self.search_shortcut = QtWidgets.QShortcut(QtGui.QKeySequence("Ctrl+F"), self)
+        self.search_shortcut.setContext(QtCore.Qt.WidgetWithChildrenShortcut)
+        self.search_shortcut.activated.connect(self._show_search)
+    
+    def _show_search(self):
+        """Show the search widget."""
+        if self.search_widget:
+            self.search_widget.show_and_focus()
     
     def eventFilter(self, obj, event):
         """Event filter for font resizing with Ctrl+Wheel."""
