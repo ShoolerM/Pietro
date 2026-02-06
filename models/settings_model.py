@@ -37,6 +37,12 @@ class SettingsModel(Observable):
         self._summarize_prompts = True
         self._build_with_rag = False
         self._summary_prompt_template = self.DEFAULT_SUMMARY_PROMPT
+
+        # Per-model profile settings
+        self._model_profiles = {}
+
+        # Last selected model
+        self._last_model = None
         
         # Prompt selections
         self._selected_supplemental_files = []
@@ -47,6 +53,114 @@ class SettingsModel(Observable):
         self._load_summary_prompt()
         self._load_prompt_selections()
         self._load_build_with_rag()
+        self._load_model_profiles()
+        self._load_last_model()
+
+    @property
+    def last_model(self):
+        """Get last selected model name."""
+        return self._last_model
+
+    @last_model.setter
+    def last_model(self, value):
+        """Set last selected model name."""
+        self._last_model = value
+        self._save_last_model()
+
+    def _model_profile_key(self, model_name, base_url):
+        """Build a stable key for model profiles."""
+        return f"{model_name}||{base_url}"
+
+    def _load_model_profiles(self):
+        """Load per-model settings profiles from file."""
+        settings_dir = Path('settings')
+        settings_file = settings_dir / 'model_profiles.json'
+
+        try:
+            if settings_file.exists():
+                with open(settings_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                self._model_profiles = data.get('profiles', {})
+                print(f"✓ Loaded {len(self._model_profiles)} model profile(s)")
+        except Exception as e:
+            print(f"⚠ Error loading model profiles: {e}. Using defaults.")
+
+    def _save_model_profiles(self):
+        """Persist per-model settings profiles to file."""
+        settings_dir = Path('settings')
+        settings_dir.mkdir(exist_ok=True)
+        settings_file = settings_dir / 'model_profiles.json'
+
+        try:
+            data = {
+                'profiles': self._model_profiles
+            }
+            with open(settings_file, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=2)
+        except Exception as e:
+            print(f"⚠ Error saving model profiles: {e}")
+
+    def _load_last_model(self):
+        """Load last selected model from file."""
+        settings_dir = Path('settings')
+        settings_file = settings_dir / 'last_model.json'
+
+        try:
+            if settings_file.exists():
+                with open(settings_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                self._last_model = data.get('model')
+                if self._last_model:
+                    print(f"✓ Loaded last model: {self._last_model}")
+        except Exception as e:
+            print(f"⚠ Error loading last model: {e}")
+
+    def _save_last_model(self):
+        """Persist last selected model to file."""
+        settings_dir = Path('settings')
+        settings_dir.mkdir(exist_ok=True)
+        settings_file = settings_dir / 'last_model.json'
+
+        try:
+            data = {'model': self._last_model}
+            with open(settings_file, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=2)
+        except Exception as e:
+            print(f"⚠ Error saving last model: {e}")
+
+    def save_model_profile(self, model_name, base_url, context_limit,
+                           inference_ip, inference_port):
+        """Save the current settings as a profile for a model/base_url."""
+        if not model_name or not base_url:
+            return
+
+        key = self._model_profile_key(model_name, base_url)
+        self._model_profiles[key] = {
+            'model': model_name,
+            'base_url': base_url,
+            'inference_ip': inference_ip,
+            'inference_port': inference_port,
+            'context_limit': context_limit
+        }
+        self._save_model_profiles()
+
+    def get_model_profile(self, model_name, base_url):
+        """Get a saved model profile, preferring exact base_url match."""
+        if not model_name:
+            return None
+
+        # Exact match on model + base_url
+        if base_url:
+            key = self._model_profile_key(model_name, base_url)
+            if key in self._model_profiles:
+                return self._model_profiles[key]
+
+        # Fallback: match by model name only (any base_url)
+        for profile in self._model_profiles.values():
+            if profile.get('model') == model_name:
+                return profile
+
+        return None
     
     @property
     def base_url(self):

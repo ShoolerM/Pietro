@@ -149,7 +149,7 @@ class MainController:
     def _on_llm_changed(self, event_type, data):
         """Handle LLM model changes."""
         if event_type == 'models_fetched':
-            self.view.set_models(data)
+            self.view.set_models(data, self.settings_model.last_model)
         elif event_type == 'model_changed':
             # Model already updated
             pass
@@ -553,11 +553,61 @@ class MainController:
     
     def _on_model_changed(self, model_name):
         """Handle model selection change."""
+        # Save profile for current model before switching
+        self._save_current_model_profile()
+
+        # Persist last selected model
+        if model_name:
+            self.settings_model.last_model = model_name
+
+        # Apply profile settings for the newly selected model (if any)
+        profile = self.settings_model.get_model_profile(model_name, self.settings_model.base_url)
+        if profile:
+            self._apply_model_profile(profile)
+
+        # Update the LLM model
         self.llm_controller.update_model(model_name)
     
     def _on_context_limit_changed(self, limit):
         """Handle context limit change."""
         self.settings_model.context_limit = limit
+        self._save_current_model_profile()
+
+    def _save_current_model_profile(self):
+        """Persist current settings for the active model + base URL."""
+        try:
+            model_name = self.llm_model.current_model
+            if not model_name:
+                return
+
+            self.settings_model.save_model_profile(
+                model_name=model_name,
+                base_url=self.settings_model.base_url,
+                context_limit=self.settings_model.context_limit,
+                inference_ip=self.settings_model.inference_ip,
+                inference_port=self.settings_model.inference_port
+            )
+        except Exception:
+            pass
+
+    def _apply_model_profile(self, profile):
+        """Apply a saved model profile to current settings."""
+        try:
+            # Apply inference settings if they differ
+            profile_ip = profile.get('inference_ip')
+            profile_port = profile.get('inference_port')
+            if profile_ip and profile_port:
+                self.settings_model.inference_ip = profile_ip
+                self.settings_model.inference_port = profile_port
+                self.llm_model.base_url = self.settings_model.base_url
+
+            # Apply context limit
+            context_limit = profile.get('context_limit')
+            if context_limit:
+                self.settings_model.context_limit = context_limit
+                self.view.set_context_limit(context_limit)
+        except Exception:
+            pass
 
     def _on_toggle_summarize_prompts(self):
         """Toggle the summarize prompts setting (triggered from UI)."""
@@ -1129,6 +1179,12 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
                 self.settings_model.save_inference_settings()
                 print(f"✓ Inference server updated to: {ip}:{port}")
                 print(f"  Base URL: {self.settings_model.base_url}")
+
+                # Ensure LLM model uses updated base URL
+                self.llm_model.base_url = self.settings_model.base_url
+
+                # Save profile for current model with new inference settings
+                self._save_current_model_profile()
                 
                 # Show success message
                 QtWidgets.QMessageBox.information(

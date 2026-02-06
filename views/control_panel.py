@@ -117,6 +117,14 @@ class ControlPanel(QtWidgets.QWidget):
     def get_user_input(self):
         """Get user input text."""
         return self.input_field.toPlainText().strip()
+
+    def set_context_limit(self, value):
+        """Set context limit spinbox without emitting signals."""
+        try:
+            self.context_limit_spinbox.blockSignals(True)
+            self.context_limit_spinbox.setValue(int(value))
+        finally:
+            self.context_limit_spinbox.blockSignals(False)
     
     def clear_user_input(self):
         """Clear user input field."""
@@ -138,12 +146,14 @@ class ControlPanel(QtWidgets.QWidget):
         """Enable or disable the stop button."""
         self.stop_button.setEnabled(enabled)
     
-    def set_models(self, models):
+    def set_models(self, models, selected_model=None):
         """Set available models in dropdown."""
         self.model_combo.clear()
         if models:
             self.model_combo.addItems(models)
-            if self.model_combo.count() > 0:
+            if selected_model and selected_model in models:
+                self.model_combo.setCurrentText(selected_model)
+            elif self.model_combo.count() > 0:
                 self.model_combo.setCurrentIndex(0)
         else:
             self.model_combo.addItem("No models available")

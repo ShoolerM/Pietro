@@ -407,7 +407,15 @@ class RAGController:
                 progress.append_detail(f"  ✓ Successfully ingested")
                 success_count += 1
             except Exception as e:
-                progress.append_detail(f"  ❌ Ingestion error: {e}")
+                import traceback
+                error_type = type(e).__name__
+                error_msg = str(e)
+                progress.append_detail(f"  ❌ {error_type}: {error_msg}")
+                # Also log the full traceback to console for debugging
+                print(f"\n{'='*80}")
+                print(f"ERROR ingesting {file_name}:")
+                traceback.print_exc()
+                print(f"{'='*80}\n")
                 error_count += 1
             
             progress.set_progress(idx)

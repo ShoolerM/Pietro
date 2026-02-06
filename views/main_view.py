@@ -247,10 +247,14 @@ class MainView(QtWidgets.QWidget):
     def set_stop_enabled(self, enabled):
         """Enable or disable the stop button."""
         self.control_panel.set_stop_enabled(enabled)
+
+    def set_context_limit(self, value):
+        """Set the context limit in the control panel."""
+        self.control_panel.set_context_limit(value)
     
-    def set_models(self, models):
+    def set_models(self, models, selected_model=None):
         """Set available models in dropdown."""
-        self.control_panel.set_models(models)
+        self.control_panel.set_models(models, selected_model)
     
     def set_model_error(self, error_message):
         """Set error message in model dropdown."""
