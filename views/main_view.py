@@ -268,9 +268,28 @@ class MainView(QtWidgets.QWidget):
         """Load RAG databases into tree widget."""
         self.prompts_panel.load_rag_databases(databases)
     
-    def show_file_chooser(self, title, multiple=False):
-        """Show file chooser dialog."""
-        if multiple:
+    def show_file_chooser(self, title, multiple=False, allow_directory=False):
+        """Show file chooser dialog.
+        
+        Args:
+            title: Dialog title
+            multiple: Allow selecting multiple files
+            allow_directory: Allow selecting files or directories
+        
+        Returns:
+            list: Selected file/directory paths
+        """
+        if allow_directory:
+            # Use file dialog that allows selecting both files and directories
+            dialog = QtWidgets.QFileDialog(self, title, "")
+            dialog.setFileMode(QtWidgets.QFileDialog.ExistingFiles)
+            dialog.setOption(QtWidgets.QFileDialog.DontUseNativeDialog, True)
+            dialog.setOption(QtWidgets.QFileDialog.DontResolveSymlinks, True)
+            
+            if dialog.exec() == QtWidgets.QDialog.Accepted:
+                return dialog.selectedFiles()
+            return []
+        elif multiple:
             file_paths, _ = QtWidgets.QFileDialog.getOpenFileNames(
                 self, title, "", "All Files (*.*)"
             )

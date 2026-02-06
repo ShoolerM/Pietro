@@ -344,12 +344,37 @@ class RAGController:
         Args:
             db_name: Name of the database
         """
-        file_paths = self.view.show_file_chooser(
+        # Get files or directory from user
+        selected = self.view.show_file_chooser(
             'Add Files to Database',
-            multiple=True
+            allow_directory=True
         )
         
+        if not selected:
+            return
+        
+        # Process selected items (can be files or directories)
+        text_extensions = {'.txt', '.csv', '.html', '.htm', '.md', '.markdown', '.json', '.jsonl', '.pdf', '.doc', '.docx', '.tex', '.rtf', '.xml'}
+        file_paths = []
+        
+        for selection_str in selected:
+            selection = Path(selection_str)
+            if selection.is_dir():
+                # Recursively find all text files in directory
+                for file_path in selection.rglob('*'):
+                    if file_path.is_file() and file_path.suffix.lower() in text_extensions:
+                        file_paths.append(str(file_path))
+            elif selection.is_file():
+                # Add file directly
+                file_paths.append(str(selection))
+        
         if not file_paths:
+            from PyQt5 import QtWidgets
+            QtWidgets.QMessageBox.warning(
+                self.view,
+                'No Text Files Found',
+                f'No text files with recognized extensions were found in the selected items.\n\nSupported: {" ".join(sorted(text_extensions))}'
+            )
             return
         
         # Show progress dialog
