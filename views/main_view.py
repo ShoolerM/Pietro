@@ -282,9 +282,18 @@ class MainView(QtWidgets.QWidget):
         if allow_directory:
             # Use file dialog that allows selecting both files and directories
             dialog = QtWidgets.QFileDialog(self, title, "")
-            dialog.setFileMode(QtWidgets.QFileDialog.ExistingFiles)
+            dialog.setFileMode(QtWidgets.QFileDialog.Directory)
             dialog.setOption(QtWidgets.QFileDialog.DontUseNativeDialog, True)
             dialog.setOption(QtWidgets.QFileDialog.DontResolveSymlinks, True)
+            dialog.setOption(QtWidgets.QFileDialog.ShowDirsOnly, False)
+            
+            # Allow multiple selection
+            file_view = dialog.findChild(QtWidgets.QListView, "listView")
+            if file_view:
+                file_view.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
+            tree_view = dialog.findChild(QtWidgets.QTreeView)
+            if tree_view:
+                tree_view.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
             
             if dialog.exec() == QtWidgets.QDialog.Accepted:
                 return dialog.selectedFiles()
