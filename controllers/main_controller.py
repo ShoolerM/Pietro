@@ -1035,6 +1035,16 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
         """Called when a chunk generation completes."""
         state = self._auto_build_state
         
+        # Check if user requested stop
+        if self.llm_model.stop_generation:
+            self.view.append_thinking_text(f"\n\n{'='*60}\n")
+            self.view.append_thinking_text(f"⏹️ AUTO BUILD STOPPED BY USER\n")
+            self.view.append_thinking_text(f"Generated {state['chunk_count']} chunks.\n")
+            self.view.append_thinking_text(f"{'='*60}\n")
+            self.view.set_stop_enabled(False)
+            self.view.render_markdown()
+            return
+        
         self.view.append_thinking_text(f"\n✅ Chunk {state['chunk_count']} complete!\n")
         
         # Update story model with new content
@@ -1048,6 +1058,17 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
     
     def _on_auto_build_summarization_complete(self, story_for_llm, tokens):
         """Called when summarization completes during auto-build."""
+        # Check if user requested stop
+        if self.llm_model.stop_generation:
+            state = self._auto_build_state
+            self.view.append_thinking_text(f"\n\n{'='*60}\n")
+            self.view.append_thinking_text(f"⏹️ AUTO BUILD STOPPED BY USER (during summarization)\n")
+            self.view.append_thinking_text(f"Generated {state['chunk_count']} chunks.\n")
+            self.view.append_thinking_text(f"{'='*60}\n")
+            self.view.set_stop_enabled(False)
+            self.view.render_markdown()
+            return
+        
         self.view.append_thinking_text(f"\n✅ Summarization complete ({tokens} tokens)\n")
         self.view.append_thinking_text(f"Continuing with chunk generation...\n\n")
         
