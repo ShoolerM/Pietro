@@ -31,6 +31,7 @@ class MainView(QtWidgets.QWidget):
     rag_delete_database_clicked = QtCore.pyqtSignal(str)  # database name
     rag_similarity_threshold_changed = QtCore.pyqtSignal(float)  # threshold value
     rag_max_docs_changed = QtCore.pyqtSignal(int)  # max documents per database
+    rag_max_chunks_changed = QtCore.pyqtSignal(int)  # max chunks for auto-build
     rag_settings_requested = QtCore.pyqtSignal()  # request to show settings dialog
     prompt_selections_changed = QtCore.pyqtSignal(list, str)  # supplemental_files, system_prompt
     settings_opened = QtCore.pyqtSignal()
@@ -80,7 +81,7 @@ class MainView(QtWidgets.QWidget):
         inference_settings_action.triggered.connect(lambda: self.inference_settings_requested.emit())
         
         rag_menu = menu_bar.addMenu('RAG')
-        rag_settings_action = rag_menu.addAction('Similarity Threshold...')
+        rag_settings_action = rag_menu.addAction('RAG Settings...')
         rag_settings_action.triggered.connect(lambda: self.rag_settings_requested.emit())
         
         # Main vertical splitter - story panel on top, prompts on bottom
@@ -160,6 +161,7 @@ class MainView(QtWidgets.QWidget):
         self.prompts_panel.rag_delete_database_clicked.connect(self.rag_delete_database_clicked.emit)
         self.prompts_panel.rag_similarity_threshold_changed.connect(self.rag_similarity_threshold_changed.emit)
         self.prompts_panel.rag_max_docs_changed.connect(self.rag_max_docs_changed.emit)
+        self.prompts_panel.rag_max_chunks_changed.connect(self.rag_max_chunks_changed.emit)
         self.prompts_panel.rag_settings_requested.connect(self.rag_settings_requested.emit)
         self.prompts_panel.prompt_selections_changed.connect(self.prompt_selections_changed.emit)
         self.prompts_panel.font_size_changed.connect(self.font_size_changed.emit)
@@ -324,9 +326,13 @@ class MainView(QtWidgets.QWidget):
         self.prompts_panel.apply_font_size(size)
         self.control_panel.apply_font_size(size)
     
-    def show_rag_settings_dialog(self, current_max_docs=3, current_threshold=0.0):
+    def show_rag_settings_dialog(self, current_max_docs=3, current_threshold=0.0, current_max_chunks=10):
         """Show RAG settings dialog with current values."""
-        return self.prompts_panel.show_rag_settings_dialog(current_max_docs, current_threshold)
+        return self.prompts_panel.show_rag_settings_dialog(
+            current_max_docs=current_max_docs,
+            current_threshold=current_threshold,
+            current_max_chunks=current_max_chunks
+        )
     
     def show_inference_settings_dialog(self, current_ip='192.168.0.1', current_port=1234):
         """Show inference server settings dialog."""

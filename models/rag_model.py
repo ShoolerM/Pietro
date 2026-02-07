@@ -31,6 +31,7 @@ class RAGModel(Observable):
         # RAG query settings - will be loaded from file
         self.similarity_threshold = 0.0  # Default: no filtering
         self.max_docs = 3  # Default: retrieve 3 chunks per database
+        self.max_chunks = 10  # Default: auto-build chunks
         
         # Load databases and settings
         self._load_data()
@@ -49,6 +50,7 @@ class RAGModel(Observable):
                     settings = data.get('settings', {})
                     self.similarity_threshold = settings.get('similarity_threshold', 0.0)
                     self.max_docs = settings.get('max_docs', 3)
+                    self.max_chunks = settings.get('max_chunks', 10)
                     
                     # Load selected databases
                     selected_list = data.get('selected_databases', [])
@@ -60,11 +62,15 @@ class RAGModel(Observable):
                     self._databases = data
                     self.similarity_threshold = 0.0
                     self.max_docs = 3
+                    self.max_chunks = 10
                     # Save in new format immediately
                     self._save_data()
                     print("Migration complete!")
                 
-                print(f"Loaded RAG settings: threshold={self.similarity_threshold}, max_docs={self.max_docs}")
+                print(
+                    f"Loaded RAG settings: threshold={self.similarity_threshold}, "
+                    f"max_docs={self.max_docs}, max_chunks={self.max_chunks}"
+                )
                 if self._selected_databases:
                     print(f"Loaded selected databases: {list(self._selected_databases)}")
             except Exception as e:
@@ -78,7 +84,8 @@ class RAGModel(Observable):
                 'databases': self._databases,
                 'settings': {
                     'similarity_threshold': self.similarity_threshold,
-                    'max_docs': self.max_docs
+                    'max_docs': self.max_docs,
+                    'max_chunks': self.max_chunks
                 },
                 'selected_databases': list(self._selected_databases)
             }
@@ -246,4 +253,14 @@ class RAGModel(Observable):
         self.max_docs = max(1, min(20, max_docs))
         self._save_data()  # Save settings to persist
         print(f"RAG max documents set to: {self.max_docs}")
+
+    def set_max_chunks(self, max_chunks):
+        """Set the maximum number of chunks to generate in auto-build mode.
+
+        Args:
+            max_chunks: Integer between 1 and 50
+        """
+        self.max_chunks = max(1, min(50, max_chunks))
+        self._save_data()  # Save settings to persist
+        print(f"RAG max chunks set to: {self.max_chunks}")
 

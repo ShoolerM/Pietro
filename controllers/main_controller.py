@@ -71,6 +71,7 @@ class MainController:
         self.view.rag_delete_database_clicked.connect(self.rag_controller.delete_database)
         self.view.rag_similarity_threshold_changed.connect(self.rag_model.set_similarity_threshold)
         self.view.rag_max_docs_changed.connect(self.rag_model.set_max_docs)
+        self.view.rag_max_chunks_changed.connect(self.rag_model.set_max_chunks)
         self.view.rag_settings_requested.connect(self._on_rag_settings_requested)
         self.view.prompt_selections_changed.connect(self._on_prompt_selections_changed)
         self.view.settings_opened.connect(self._on_settings_opened)
@@ -903,7 +904,7 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
             'supp_text': supp_text,
             'system_prompt': system_prompt,
             'chunk_count': 0,
-            'max_chunks': 10,
+            'max_chunks': self.rag_model.max_chunks,
             'paragraphs_per_chunk': 3,
             'chunks_before_summary': 3,
             'last_rag_context': None
@@ -1147,7 +1148,8 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
         # Get current settings from model and show dialog
         self.view.show_rag_settings_dialog(
             current_max_docs=self.rag_model.max_docs,
-            current_threshold=self.rag_model.similarity_threshold
+            current_threshold=self.rag_model.similarity_threshold,
+            current_max_chunks=self.rag_model.max_chunks
         )
     
     def _on_inference_settings_requested(self):

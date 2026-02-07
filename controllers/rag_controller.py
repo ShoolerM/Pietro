@@ -190,7 +190,6 @@ class RAGController:
             print(f"   Error: {e}")
             import traceback
             traceback.print_exc()
-            self.view.show_warning("RAG Error", f"Error handling RAG event:\n{type(e).__name__}: {e}")
     
     def _ingest_file(self, db_name, file_path):
         """Ingest a file into the database (legacy method for backward compatibility).
@@ -317,8 +316,6 @@ class RAGController:
                 import traceback
                 traceback.print_exc()
                 log(f"{'='*80}\n")
-                self.view.show_warning("Ingestion Error", 
-                    f"Failed to add file to database:\n{type(e).__name__}: {e}")
             
             # Re-raise so caller can handle
             raise

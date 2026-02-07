@@ -119,6 +119,7 @@ class PromptsPanel(QtWidgets.QWidget):
     rag_delete_database_clicked = QtCore.pyqtSignal(str)  # database name
     rag_similarity_threshold_changed = QtCore.pyqtSignal(float)  # threshold value
     rag_max_docs_changed = QtCore.pyqtSignal(int)  # max documents per database
+    rag_max_chunks_changed = QtCore.pyqtSignal(int)  # max chunks for auto-build
     rag_settings_requested = QtCore.pyqtSignal()  # request to show settings dialog
     prompt_selections_changed = QtCore.pyqtSignal(list, str)  # supplemental_files, system_prompt
     font_size_changed = QtCore.pyqtSignal(int)  # delta
@@ -656,12 +657,13 @@ class PromptsPanel(QtWidgets.QWidget):
             import traceback
             traceback.print_exc()
     
-    def show_rag_settings_dialog(self, current_max_docs=3, current_threshold=0.0):
+    def show_rag_settings_dialog(self, current_max_docs=3, current_threshold=0.0, current_max_chunks=10):
         """Show RAG settings dialog with current values.
         
         Args:
             current_max_docs: Current max documents setting
             current_threshold: Current similarity threshold setting
+            current_max_chunks: Current max chunks setting
         """
         # Create dialog
         dialog = QtWidgets.QDialog(self)
@@ -669,6 +671,33 @@ class PromptsPanel(QtWidgets.QWidget):
         dialog.setMinimumWidth(450)
         
         layout = QtWidgets.QVBoxLayout()
+
+        # === Max Chunks Section ===
+        max_chunks_group = QtWidgets.QGroupBox('Maximum Chunks (Auto-Build)')
+        max_chunks_layout = QtWidgets.QVBoxLayout()
+
+        max_chunks_desc = QtWidgets.QLabel(
+            'Maximum number of chunks to generate during auto-build RAG mode.\n'
+            'Default: 10'
+        )
+        max_chunks_desc.setWordWrap(True)
+        max_chunks_layout.addWidget(max_chunks_desc)
+
+        max_chunks_input_layout = QtWidgets.QHBoxLayout()
+        max_chunks_label = QtWidgets.QLabel('Max Chunks:')
+        max_chunks_input_layout.addWidget(max_chunks_label)
+
+        max_chunks_spinbox = QtWidgets.QSpinBox()
+        max_chunks_spinbox.setMinimum(1)
+        max_chunks_spinbox.setMaximum(50)
+        max_chunks_spinbox.setValue(current_max_chunks)
+        max_chunks_spinbox.setToolTip('Number of chunks to generate in auto-build mode (1-50)')
+        max_chunks_input_layout.addWidget(max_chunks_spinbox)
+        max_chunks_input_layout.addStretch()
+
+        max_chunks_layout.addLayout(max_chunks_input_layout)
+        max_chunks_group.setLayout(max_chunks_layout)
+        layout.addWidget(max_chunks_group)
         
         # === Max Documents Section ===
         max_docs_group = QtWidgets.QGroupBox('Maximum Documents per Database')
@@ -696,6 +725,7 @@ class PromptsPanel(QtWidgets.QWidget):
         max_docs_layout.addLayout(max_docs_input_layout)
         max_docs_group.setLayout(max_docs_layout)
         layout.addWidget(max_docs_group)
+
         
         # === Similarity Threshold Section ===
         threshold_group = QtWidgets.QGroupBox('Similarity Threshold')
@@ -750,10 +780,13 @@ class PromptsPanel(QtWidgets.QWidget):
         # Show dialog
         if dialog.exec_() == QtWidgets.QDialog.Accepted:
             max_docs = max_docs_spinbox.value()
+            max_chunks = max_chunks_spinbox.value()
             threshold = slider.value() / 100.0
             print(f"RAG max documents set to: {max_docs}")
+            print(f"RAG max chunks set to: {max_chunks}")
             print(f"RAG similarity threshold set to: {threshold}")
             self.rag_max_docs_changed.emit(max_docs)
+            self.rag_max_chunks_changed.emit(max_chunks)
             self.rag_similarity_threshold_changed.emit(threshold)
     
     def show_warning(self, title, message):
