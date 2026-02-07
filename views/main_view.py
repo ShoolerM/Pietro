@@ -134,7 +134,6 @@ class MainView(QtWidgets.QWidget):
         self.story_panel.file_saved.connect(self.file_saved.emit)
         self.story_panel.font_size_changed.connect(self.font_size_changed.emit)
         self.story_panel.toggle_thinking_requested.connect(self._toggle_thinking_panel)
-        self.story_panel.toggle_markdown_requested.connect(self._toggle_markdown)
         self.story_panel.update_summary_requested.connect(self.update_summary_requested.emit)
         self.story_panel.toggle_summarize_prompts_requested.connect(self.toggle_summarize_prompts_requested.emit)
         self.story_panel.toggle_build_with_rag_requested.connect(self.toggle_build_with_rag_requested.emit)
@@ -185,17 +184,6 @@ class MainView(QtWidgets.QWidget):
         else:
             self.thinking_panel.show()
             self.story_panel.set_thinking_visible(True)
-    
-    def _toggle_markdown(self):
-        """Toggle markdown rendering in story panel."""
-        current_state = self.story_panel.is_markdown_enabled()
-        new_state = not current_state
-        self.story_panel.set_markdown_enabled(new_state)
-        
-        # Re-render the current content with new setting
-        current_content = self.story_panel.get_story_content()
-        if current_content:
-            self.story_panel.set_story_content(current_content)
     
     def _on_send(self):
         """Handle send button click - gather data from all panels."""
@@ -420,11 +408,11 @@ class MainView(QtWidgets.QWidget):
         
         return None
     
-    def show_general_settings_dialog(self, current_auto_notes):
+    def show_general_settings_dialog(self, current_auto_notes, current_render_markdown):
         """Show general settings dialog and return updated settings if saved."""
         dialog = QtWidgets.QDialog(self)
         dialog.setWindowTitle('General Settings')
-        dialog.resize(400, 200)
+        dialog.resize(400, 250)
         
         layout = QtWidgets.QVBoxLayout()
         
@@ -436,6 +424,15 @@ class MainView(QtWidgets.QWidget):
             'Notes include character details, motivations, clothing, relationships, and current actions.'
         )
         layout.addWidget(auto_notes_checkbox)
+        
+        # Render Markdown checkbox
+        render_markdown_checkbox = QtWidgets.QCheckBox('Render Story as Markdown')
+        render_markdown_checkbox.setChecked(current_render_markdown)
+        render_markdown_checkbox.setToolTip(
+            'Render the story text with markdown formatting (headers, bold, italics, etc.).\n'
+            'Uncheck to display plain text without formatting.'
+        )
+        layout.addWidget(render_markdown_checkbox)
         
         # Add spacer
         layout.addStretch()
@@ -451,11 +448,12 @@ class MainView(QtWidgets.QWidget):
         
         dialog.setLayout(layout)
         
-        result = {'saved': False, 'auto_notes': None}
+        result = {'saved': False, 'auto_notes': None, 'render_markdown': None}
         
         def on_save():
             result['saved'] = True
             result['auto_notes'] = auto_notes_checkbox.isChecked()
+            result['render_markdown'] = render_markdown_checkbox.isChecked()
             dialog.accept()
         
         save_button.clicked.connect(on_save)

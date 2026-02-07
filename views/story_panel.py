@@ -12,7 +12,6 @@ class StoryPanel(QtWidgets.QWidget):
     file_saved = QtCore.pyqtSignal(str, str)  # file_path, content
     font_size_changed = QtCore.pyqtSignal(int)  # delta
     toggle_thinking_requested = QtCore.pyqtSignal()  # request to toggle thinking panel
-    toggle_markdown_requested = QtCore.pyqtSignal()  # request to toggle markdown
     update_summary_requested = QtCore.pyqtSignal()  # request to regenerate summary
     toggle_summarize_prompts_requested = QtCore.pyqtSignal()  # request to toggle prompt summarization
     toggle_build_with_rag_requested = QtCore.pyqtSignal()  # request to toggle build with RAG mode
@@ -182,11 +181,6 @@ class StoryPanel(QtWidgets.QWidget):
         thinking_text = "Hide Thinking Panel" if self._thinking_visible else "Show Thinking Panel"
         thinking_action = menu.addAction(thinking_text)
         thinking_action.triggered.connect(lambda: self.toggle_thinking_requested.emit())
-        
-        # Toggle Markdown action
-        markdown_text = "Markdown: ON" if self._markdown_enabled else "Markdown: OFF"
-        markdown_action = menu.addAction(markdown_text)
-        markdown_action.triggered.connect(lambda: self.toggle_markdown_requested.emit())
         
         # Show menu at cursor position
         menu.exec_(self.story_text.mapToGlobal(position))

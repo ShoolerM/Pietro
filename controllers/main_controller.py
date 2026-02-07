@@ -316,6 +316,15 @@ class MainController:
                 self.view.set_build_with_rag_enabled(data)
             except Exception:
                 pass
+        elif event_type == 'render_markdown_changed':
+            # Update story panel markdown rendering
+            try:
+                self.view.story_panel.set_markdown_enabled(data)
+                # Re-render story if markdown enabled
+                if data and self._markdown_content:
+                    self.view.render_story_markdown(self._markdown_content)
+            except Exception:
+                pass
     
     def _on_story_changed(self, event_type, data):
         """Handle story model changes."""
@@ -1439,13 +1448,25 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
     
     def _on_general_settings_requested(self):
         """Handle general settings menu action."""
-        saved, auto_notes = self.view.show_general_settings_dialog(
-            self.settings_model.auto_notes
+        result = self.view.show_general_settings_dialog(
+            self.settings_model.auto_notes,
+            self.settings_model.render_markdown
         )
         
-        if saved and auto_notes is not None:
-            self.settings_model.auto_notes = auto_notes
-            print(f"✓ Auto Notes: {'enabled' if auto_notes else 'disabled'}")
+        if result['saved']:
+            if result['auto_notes'] is not None:
+                self.settings_model.auto_notes = result['auto_notes']
+                print(f"✓ Auto Notes: {'enabled' if result['auto_notes'] else 'disabled'}")
+            
+            if result['render_markdown'] is not None:
+                self.settings_model.render_markdown = result['render_markdown']
+                # Update story panel markdown state immediately
+                self.view.story_panel.set_markdown_enabled(result['render_markdown'])
+                # Re-render current story with new setting
+                current_story = self.view.get_story_content()
+                if result['render_markdown'] and current_story:
+                    self.view.render_story_markdown(self._markdown_content)
+                print(f"✓ Render Markdown: {'enabled' if result['render_markdown'] else 'disabled'}")
     
     def _on_settings_opened(self):
         """Handle settings menu action.
@@ -1578,6 +1599,9 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
     
     def show(self):
         """Show the main view."""
+        # Initialize story panel markdown state from settings
+        self.view.story_panel.set_markdown_enabled(self.settings_model.render_markdown)
+        
         self.view.resize(800, 600)
         self.view.show()
 

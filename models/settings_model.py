@@ -52,6 +52,7 @@ class SettingsModel(Observable):
         self._summarize_prompts = True
         self._build_with_rag = False
         self._auto_notes = True  # Auto-generate notes by default
+        self._render_markdown = True  # Render story as markdown by default
         self._summary_prompt_template = self.DEFAULT_SUMMARY_PROMPT
         self._notes_prompt_template = self.DEFAULT_NOTES_PROMPT
 
@@ -71,6 +72,7 @@ class SettingsModel(Observable):
         self._load_notes_prompt()
         self._load_prompt_selections()
         self._load_build_with_rag()
+        self._load_render_markdown()
         self._load_model_profiles()
         self._load_last_model()
 
@@ -301,6 +303,18 @@ class SettingsModel(Observable):
         """Enable or disable auto-generate notes."""
         self._auto_notes = bool(value)
         self.notify_observers('auto_notes_changed', self._auto_notes)
+    
+    @property
+    def render_markdown(self):
+        """Get render markdown enabled status."""
+        return self._render_markdown
+    
+    @render_markdown.setter
+    def render_markdown(self, value):
+        """Set render markdown enabled status."""
+        self._render_markdown = bool(value)
+        self._save_render_markdown()
+        self.notify_observers('render_markdown_changed', self._render_markdown)
     
     @property
     def summary_prompt_template(self):
@@ -556,6 +570,43 @@ class SettingsModel(Observable):
         except Exception as e:
             print(f"⚠ Error loading build_with_rag setting: {e}. Using default.")
             self._build_with_rag = False
+    
+    def _load_render_markdown(self):
+        """Load render markdown setting from file."""
+        settings_dir = Path('settings')
+        settings_file = settings_dir / 'inference_settings.json'
+
+        try:
+            if settings_file.exists():
+                with open(settings_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                self._render_markdown = data.get('render_markdown', True)
+                print(f"✓ Loaded render_markdown setting: {self._render_markdown}")
+        except Exception as e:
+            print(f"⚠ Error loading render_markdown setting: {e}. Using default (True).")
+            self._render_markdown = True
+    
+    def _save_render_markdown(self):
+        """Save render markdown setting to file."""
+        settings_dir = Path('settings')
+        settings_dir.mkdir(exist_ok=True)
+        settings_file = settings_dir / 'inference_settings.json'
+
+        try:
+            # Load existing settings first
+            data = {}
+            if settings_file.exists():
+                with open(settings_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+            
+            # Update render_markdown
+            data['render_markdown'] = self._render_markdown
+            
+            # Save back
+            with open(settings_file, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=2)
+        except Exception as e:
+            print(f"⚠ Error saving render_markdown setting: {e}")
     
     def _save_build_with_rag(self):
         """Save build_with_rag setting to file."""
