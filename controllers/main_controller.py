@@ -24,6 +24,13 @@ class NotesGeneratorSignals(QtCore.QObject):
     notes_error = QtCore.pyqtSignal(str)  # error_message
 
 
+class CondenserSignals(QtCore.QObject):
+    """Signals for background prompt condensing."""
+    condense_ready = QtCore.pyqtSignal(str, str, str)  # condensed supp_text, system_prompt, notes
+    condense_error = QtCore.pyqtSignal(str)  # error_message
+    thinking_update = QtCore.pyqtSignal(str)  # status message for thinking panel
+
+
 class MainController:
     """Main application controller that coordinates models, views, and controllers."""
     
@@ -203,6 +210,93 @@ class MainController:
         self.view.append_thinking_text(f"  ⚠ Error generating notes: {error_msg}\n\n")
         self.view.set_waiting(False)
     
+    def _condense_prompts_background(self):
+        """Condense prompts in background thread to avoid UI blocking."""
+        if not hasattr(self, '_pending_condense_context'):
+            return
+        
+        ctx = self._pending_condense_context
+        
+        # Create signals object
+        signals = CondenserSignals()
+        
+        # Connect signals to UI update handlers
+        signals.thinking_update.connect(self.view.append_thinking_text)
+        signals.condense_ready.connect(self._on_condense_ready)
+        signals.condense_error.connect(self._on_condense_error)
+        
+        def condense_in_thread():
+            try:
+                condensed_supp = ctx['supp_text']
+                condensed_system = ctx['system_prompt']
+                condensed_notes = ctx['notes']
+                
+                # Condense supplemental prompts if needed
+                if ctx['supp_tokens'] > ctx['max_supp_tokens'] and condensed_supp:
+                    signals.thinking_update.emit(f"📎 Condensing supplemental prompts...\n")
+                    condensed_supp, _ = self.llm_controller.summarize_supplemental(
+                        condensed_supp, ctx['max_supp_tokens']
+                    )
+                    signals.thinking_update.emit(f"  ✓ Supplemental prompts condensed\n")
+                
+                # Condense system prompt if needed
+                if ctx['system_tokens'] > ctx['max_system_tokens'] and condensed_system:
+                    signals.thinking_update.emit(f"🔧 Condensing system prompt...\n")
+                    condensed_system, _ = self.llm_controller.summarize_system_prompt(
+                        condensed_system, ctx['max_system_tokens']
+                    )
+                    signals.thinking_update.emit(f"  ✓ System prompt condensed\n")
+                
+                # Condense notes if needed
+                if ctx['notes_tokens'] > ctx['max_notes_tokens'] and condensed_notes:
+                    signals.thinking_update.emit(f"📝 Condensing notes...\n")
+                    condensed_notes, _ = self.llm_controller.summarize_supplemental(
+                        condensed_notes, ctx['max_notes_tokens']
+                    )
+                    signals.thinking_update.emit(f"  ✓ Notes condensed\n\n")
+                
+                signals.condense_ready.emit(condensed_supp, condensed_system, condensed_notes)
+            except Exception as e:
+                print(f"Error condensing prompts: {e}")
+                signals.condense_error.emit(str(e))
+        
+        # Start background thread
+        thread = threading.Thread(target=condense_in_thread, daemon=True)
+        thread.start()
+    
+    def _on_condense_ready(self, condensed_supp, condensed_system, condensed_notes):
+        """Handle prompt condensing completion (called on main thread via signal)."""
+        if not hasattr(self, '_pending_condense_context'):
+            self.view.set_waiting(False)
+            return
+        
+        ctx = self._pending_condense_context
+        delattr(self, '_pending_condense_context')
+        
+        # Continue with story generation using condensed prompts
+        self._continue_send(
+            ctx['user_input'],
+            condensed_notes,
+            condensed_supp,
+            condensed_system
+        )
+    
+    def _on_condense_error(self, error_msg):
+        """Handle prompt condensing error (called on main thread via signal)."""
+        self.view.append_thinking_text(f"  ⚠ Error condensing prompts: {error_msg}\n\n")
+        self.view.set_waiting(False)
+        
+        # Continue with original uncondensed prompts
+        if hasattr(self, '_pending_condense_context'):
+            ctx = self._pending_condense_context
+            delattr(self, '_pending_condense_context')
+            self._continue_send(
+                ctx['user_input'],
+                ctx['notes'],
+                ctx['supp_text'],
+                ctx['system_prompt']
+            )
+    
     def _on_settings_changed(self, event_type, data):
         """Handle settings model changes."""
         if event_type == 'font_size_changed':
@@ -356,24 +450,23 @@ class MainController:
                 self.view.append_thinking_text(f"🔄 Condensing oversized context elements...\n\n")
                 self.view.set_waiting(True)
 
-                # Condense in background
-                if supp_tokens > max_supp_tokens and supp_text:
-                    self.view.append_thinking_text(f"📎 Condensing supplemental prompts...\n")
-                    supp_text, supp_tokens = self.llm_controller.summarize_supplemental(supp_text, max_supp_tokens)
-                    self.view.append_thinking_text(f"  ✓ Reduced to {supp_tokens} tokens\n")
-
-                if system_tokens > max_system_tokens and system_prompt:
-                    self.view.append_thinking_text(f"🔧 Condensing system prompt...\n")
-                    system_prompt, system_tokens = self.llm_controller.summarize_system_prompt(system_prompt, max_system_tokens)
-                    self.view.append_thinking_text(f"  ✓ Reduced to {system_tokens} tokens\n")
-
-                if notes_tokens > max_notes_tokens and notes:
-                    self.view.append_thinking_text(f"📝 Condensing notes...\n")
-                    # Use supplemental summarizer for notes
-                    notes, notes_tokens = self.llm_controller.summarize_supplemental(notes, max_notes_tokens)
-                    self.view.append_thinking_text(f"  ✓ Reduced to {notes_tokens} tokens\n\n")
-
-                self.view.set_waiting(False)
+                # Store context for continuation after condensing
+                self._pending_condense_context = {
+                    'user_input': user_input,
+                    'notes': notes,
+                    'supp_text': supp_text,
+                    'system_prompt': system_prompt,
+                    'supp_tokens': supp_tokens,
+                    'system_tokens': system_tokens,
+                    'notes_tokens': notes_tokens,
+                    'max_supp_tokens': max_supp_tokens,
+                    'max_system_tokens': max_system_tokens,
+                    'max_notes_tokens': max_notes_tokens
+                }
+                
+                # Condense in background thread to avoid UI blocking
+                self._condense_prompts_background()
+                return
             else:
                 # Summarization disabled - inform the user we're skipping condensing
                 self.view.append_thinking_text(f"⚠️ Prompt summarization disabled; skipping condensing of oversized prompts.\n")
