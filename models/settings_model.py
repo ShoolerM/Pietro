@@ -24,6 +24,21 @@ class SettingsModel(Observable):
         "- Write in present tense, organized by topic (characters, plot, setting, etc.)\n\n"
     )
     
+    # Default notes prompt template
+    DEFAULT_NOTES_PROMPT = (
+        "TASK: Generate a structured notes section for the current scene.\n\n"
+        "REQUIREMENTS:\n"
+        "- List ALL current characters in the scene with their names and roles\n"
+        "- For each character, include: motivations, goals, current emotional state\n"
+        "- Document each character's clothing or appearance details\n"
+        "- Describe relationships and dynamics between characters in the scene\n"
+        "- State what each character was doing last (e.g., sitting, talking, fighting, etc.)\n"
+        "- Include any relevant physical location details or environmental context\n"
+        "- Note any props, objects, or items relevant to the scene\n"
+        "- Keep it concise but comprehensive - aim for 200-400 words\n"
+        "- Organize by character for clarity\n\n"
+    )
+    
     def __init__(self):
         super().__init__()
         self._inference_ip = "192.168.0.1"
@@ -36,7 +51,9 @@ class SettingsModel(Observable):
         self._markdown_enabled = True
         self._summarize_prompts = True
         self._build_with_rag = False
+        self._auto_notes = True  # Auto-generate notes by default
         self._summary_prompt_template = self.DEFAULT_SUMMARY_PROMPT
+        self._notes_prompt_template = self.DEFAULT_NOTES_PROMPT
 
         # Per-model profile settings
         self._model_profiles = {}
@@ -51,6 +68,7 @@ class SettingsModel(Observable):
         
         self._load_inference_settings()
         self._load_summary_prompt()
+        self._load_notes_prompt()
         self._load_prompt_selections()
         self._load_build_with_rag()
         self._load_model_profiles()
@@ -274,6 +292,17 @@ class SettingsModel(Observable):
         self._save_build_with_rag()
     
     @property
+    def auto_notes(self):
+        """Check if auto-generate notes is enabled."""
+        return self._auto_notes
+
+    @auto_notes.setter
+    def auto_notes(self, value):
+        """Enable or disable auto-generate notes."""
+        self._auto_notes = bool(value)
+        self.notify_observers('auto_notes_changed', self._auto_notes)
+    
+    @property
     def summary_prompt_template(self):
         """Get summary prompt template."""
         return self._summary_prompt_template
@@ -283,6 +312,17 @@ class SettingsModel(Observable):
         """Set summary prompt template."""
         self._summary_prompt_template = value
         self.notify_observers('summary_prompt_changed', value)
+    
+    @property
+    def notes_prompt_template(self):
+        """Get notes prompt template."""
+        return self._notes_prompt_template
+    
+    @notes_prompt_template.setter
+    def notes_prompt_template(self, value):
+        """Set notes prompt template."""
+        self._notes_prompt_template = value
+        self.notify_observers('notes_prompt_changed', value)
     
     def _load_summary_prompt(self):
         """Load the summary prompt from settings/summary_prompt.txt or use default."""
@@ -298,6 +338,21 @@ class SettingsModel(Observable):
                 print(f"Using default summary prompt ({len(self._summary_prompt_template)} chars)")
         except Exception as e:
             print(f"⚠ Error loading summary prompt: {e}. Using default.")
+    
+    def _load_notes_prompt(self):
+        """Load the notes prompt from settings/notes_prompt.txt or use default."""
+        settings_dir = Path('settings')
+        prompt_file = settings_dir / 'notes_prompt.txt'
+        
+        try:
+            if prompt_file.exists():
+                with open(prompt_file, 'r', encoding='utf-8') as f:
+                    self._notes_prompt_template = f.read()
+                print(f"✓ Loaded custom notes prompt from {prompt_file} ({len(self._notes_prompt_template)} chars)")
+            else:
+                print(f"Using default notes prompt ({len(self._notes_prompt_template)} chars)")
+        except Exception as e:
+            print(f"⚠ Error loading notes prompt: {e}. Using default.")
     
     def _load_inference_settings(self):
         """Load inference server settings from file."""
@@ -360,6 +415,30 @@ class SettingsModel(Observable):
             return True
         except Exception as e:
             print(f"⚠ Error saving summary prompt: {e}")
+            return False
+
+    def save_notes_prompt(self, prompt_text: str):
+        """Save the notes prompt to settings/notes_prompt.txt.
+        
+        Args:
+            prompt_text: The prompt text to save
+            
+        Returns:
+            bool: True if save was successful, False otherwise
+        """
+        settings_dir = Path('settings')
+        settings_dir.mkdir(exist_ok=True)
+        prompt_file = settings_dir / 'notes_prompt.txt'
+        
+        try:
+            with open(prompt_file, 'w', encoding='utf-8') as f:
+                f.write(prompt_text)
+            print(f"✓ Saved notes prompt to {prompt_file} ({len(prompt_text)} chars)")
+            self._notes_prompt_template = prompt_text
+            self.notify_observers('notes_prompt_saved', prompt_text)
+            return True
+        except Exception as e:
+            print(f"⚠ Error saving notes prompt: {e}")
             return False
 
     def _load_prompt_selections(self):

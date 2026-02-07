@@ -46,7 +46,7 @@ rag_databases/*
 !rag_databases/.gitkeep
 
 # Settings - Machine-specific and generated
-settings/*.json
+settings/*
 
 # Supplemental files
 supplemental/supps/

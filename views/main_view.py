@@ -35,7 +35,9 @@ class MainView(QtWidgets.QWidget):
     rag_summary_chunk_size_changed = QtCore.pyqtSignal(int)  # max raw tokens for summarization
     rag_settings_requested = QtCore.pyqtSignal()  # request to show settings dialog
     prompt_selections_changed = QtCore.pyqtSignal(list, str)  # supplemental_files, system_prompt
-    settings_opened = QtCore.pyqtSignal()
+    summarization_prompt_requested = QtCore.pyqtSignal()  # request to show summarization prompt settings
+    notes_prompt_requested = QtCore.pyqtSignal()  # request to show notes prompt settings
+    general_settings_requested = QtCore.pyqtSignal()  # request to show general settings dialog
     file_saved = QtCore.pyqtSignal(str, str)
     font_size_changed = QtCore.pyqtSignal(int)
     inference_settings_requested = QtCore.pyqtSignal()  # request to show inference settings dialog
@@ -73,17 +75,24 @@ class MainView(QtWidgets.QWidget):
         save_action.triggered.connect(lambda: self.story_panel._save_current_file())
         save_as_action = file_menu.addAction('Save As...')
         save_as_action.triggered.connect(lambda: self.story_panel.save_story_file_as())
-        file_menu.addSeparator()
-        settings_action = file_menu.addAction('Settings')
-        settings_action.triggered.connect(lambda: self.settings_opened.emit())
         
         inference_menu = menu_bar.addMenu('Inference')
         inference_settings_action = inference_menu.addAction('Server Settings...')
         inference_settings_action.triggered.connect(lambda: self.inference_settings_requested.emit())
         
+        prompts_menu = menu_bar.addMenu('Prompts')
+        summarization_prompt_action = prompts_menu.addAction('Summarization Prompt')
+        summarization_prompt_action.triggered.connect(lambda: self.summarization_prompt_requested.emit())
+        notes_prompt_action = prompts_menu.addAction('Notes Prompt')
+        notes_prompt_action.triggered.connect(lambda: self.notes_prompt_requested.emit())
+        
         rag_menu = menu_bar.addMenu('RAG')
         rag_settings_action = rag_menu.addAction('RAG Settings...')
         rag_settings_action.triggered.connect(lambda: self.rag_settings_requested.emit())
+        
+        settings_menu = menu_bar.addMenu('Settings')
+        general_settings_action = settings_menu.addAction('General...')
+        general_settings_action.triggered.connect(lambda: self.general_settings_requested.emit())
         
         # Main vertical splitter - story panel on top, prompts on bottom
         main_vertical_splitter = QtWidgets.QSplitter(QtCore.Qt.Vertical)
@@ -411,10 +420,55 @@ class MainView(QtWidgets.QWidget):
         
         return None
     
-    def show_settings_dialog(self, current_prompt):
-        """Show settings dialog and return new prompt if saved."""
+    def show_general_settings_dialog(self, current_auto_notes):
+        """Show general settings dialog and return updated settings if saved."""
         dialog = QtWidgets.QDialog(self)
-        dialog.setWindowTitle('Settings')
+        dialog.setWindowTitle('General Settings')
+        dialog.resize(400, 200)
+        
+        layout = QtWidgets.QVBoxLayout()
+        
+        # Auto Notes checkbox
+        auto_notes_checkbox = QtWidgets.QCheckBox('Auto Notes')
+        auto_notes_checkbox.setChecked(current_auto_notes)
+        auto_notes_checkbox.setToolTip(
+            'Automatically generate scene notes before writing.\n'
+            'Notes include character details, motivations, clothing, relationships, and current actions.'
+        )
+        layout.addWidget(auto_notes_checkbox)
+        
+        # Add spacer
+        layout.addStretch()
+        
+        # Buttons
+        button_layout = QtWidgets.QHBoxLayout()
+        save_button = QtWidgets.QPushButton('Save')
+        cancel_button = QtWidgets.QPushButton('Cancel')
+        button_layout.addStretch()
+        button_layout.addWidget(save_button)
+        button_layout.addWidget(cancel_button)
+        layout.addLayout(button_layout)
+        
+        dialog.setLayout(layout)
+        
+        result = {'saved': False, 'auto_notes': None}
+        
+        def on_save():
+            result['saved'] = True
+            result['auto_notes'] = auto_notes_checkbox.isChecked()
+            dialog.accept()
+        
+        save_button.clicked.connect(on_save)
+        cancel_button.clicked.connect(dialog.reject)
+        
+        dialog.exec_()
+        
+        return result['saved'], result['auto_notes']
+    
+    def show_summarization_prompt_dialog(self, current_prompt):
+        """Show summarization prompt settings dialog and return new prompt if saved."""
+        dialog = QtWidgets.QDialog(self)
+        dialog.setWindowTitle('Summarization Prompt Settings')
         dialog.resize(600, 400)
         
         layout = QtWidgets.QVBoxLayout()
@@ -423,7 +477,8 @@ class MainView(QtWidgets.QWidget):
         layout.addWidget(label)
         
         info_label = QtWidgets.QLabel(
-            'Note: "STORY TO SUMMARIZE:\\n{story_text}\\n\\n" will be automatically appended.'
+            'This template is used to generate summaries of your story. '
+            'The story text will be automatically appended during summarization.'
         )
         info_label.setWordWrap(True)
         info_label.setStyleSheet('color: #888888; font-style: italic;')
@@ -456,6 +511,60 @@ class MainView(QtWidgets.QWidget):
         dialog.exec_()
         
         return result['saved'], result['prompt']
+    
+    def show_notes_prompt_dialog(self, current_prompt):
+        """Show notes prompt settings dialog and return new prompt if saved."""
+        dialog = QtWidgets.QDialog(self)
+        dialog.setWindowTitle('Notes Prompt Settings')
+        dialog.resize(600, 400)
+        
+        layout = QtWidgets.QVBoxLayout()
+        
+        label = QtWidgets.QLabel('Notes Prompt Template:')
+        layout.addWidget(label)
+        
+        info_label = QtWidgets.QLabel(
+            'This template is used to automatically generate scene notes before writing. '
+            'Should include instructions for what details to extract (characters, motivations, '
+            'clothing, relationships, current actions, etc.). The current story will be provided as context.'
+        )
+        info_label.setWordWrap(True)
+        info_label.setStyleSheet('color: #888888; font-style: italic;')
+        layout.addWidget(info_label)
+        
+        prompt_edit = QtWidgets.QTextEdit()
+        prompt_edit.setPlainText(current_prompt)
+        layout.addWidget(prompt_edit)
+        
+        button_layout = QtWidgets.QHBoxLayout()
+        save_button = QtWidgets.QPushButton('Save')
+        cancel_button = QtWidgets.QPushButton('Cancel')
+        button_layout.addStretch()
+        button_layout.addWidget(save_button)
+        button_layout.addWidget(cancel_button)
+        layout.addLayout(button_layout)
+        
+        dialog.setLayout(layout)
+        
+        result = {'saved': False, 'prompt': None}
+        
+        def on_save():
+            result['saved'] = True
+            result['prompt'] = prompt_edit.toPlainText()
+            dialog.accept()
+        
+        save_button.clicked.connect(on_save)
+        cancel_button.clicked.connect(dialog.reject)
+        
+        dialog.exec_()
+        
+        return result['saved'], result['prompt']
+    
+    def show_settings_dialog(self, current_prompt):
+        """Show settings dialog and return new prompt if saved.
+        DEPRECATED: Use show_summarization_prompt_dialog instead.
+        """
+        return self.show_summarization_prompt_dialog(current_prompt)
     
     def show_input_dialog(self, title, label):
         """Show input dialog and return result."""

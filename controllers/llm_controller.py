@@ -588,6 +588,77 @@ class LLMController:
             tokens = StoryModel.estimate_token_count(truncated)
             return f"[CONDENSED RAG CONTEXT]:\n{truncated}", tokens
     
+    def generate_notes(self, story_context: str, notes_prompt_template: str, on_chunk_callback=None) -> tuple[str, int]:
+        """Generate structured notes for the current scene using the notes prompt.
+        
+        Args:
+            story_context: The current story content for context
+            notes_prompt_template: Template/instructions for notes generation
+            on_chunk_callback: Optional callback for streaming chunks
+            
+        Returns:
+            tuple: (generated_notes, estimated_tokens)
+        """
+        try:
+            # Build the generation prompt
+            generation_prompt = (
+                f"{notes_prompt_template}\n\n"
+                f"STORY CONTEXT:\n{story_context}\n\n"
+                "GENERATED NOTES:"
+            )
+            
+            model_name = getattr(self.llm, 'model_name', None)
+            
+            # Create LLM with streaming enabled if callback provided
+            llm_for_notes = ChatOpenAI(
+                base_url=self.llm_model.base_url,
+                model=model_name if model_name else "default",
+                streaming=bool(on_chunk_callback),
+                temperature=0.5,  # Slightly creative but focused
+            )
+            
+            generated_notes = ""
+            
+            import warnings
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                
+                if on_chunk_callback:
+                    # Use streaming
+                    for chunk in llm_for_notes.stream([HumanMessage(content=generation_prompt)]):
+                        if hasattr(chunk, 'content'):
+                            text = chunk.content
+                        elif hasattr(chunk, 'text'):
+                            text = chunk.text
+                        else:
+                            text = str(chunk)
+                        
+                        if text:
+                            generated_notes += text
+                            on_chunk_callback(text)
+                else:
+                    # Non-streaming
+                    response = llm_for_notes.invoke([HumanMessage(content=generation_prompt)])
+                    if hasattr(response, 'content'):
+                        generated_notes = response.content
+                    elif hasattr(response, 'text'):
+                        generated_notes = response.text
+                    else:
+                        generated_notes = str(response)
+            
+            if not isinstance(generated_notes, str):
+                generated_notes = str(generated_notes)
+            
+            from models.story_model import StoryModel
+            tokens = StoryModel.estimate_token_count(generated_notes)
+            
+            return generated_notes, tokens
+            
+        except Exception as e:
+            print(f"⚠ Error generating notes: {e}")
+            # Return empty notes on error
+            return "", 0
+    
     def summarize_chunk(self, chunk_text: str, append_thinking_callback) -> tuple[str, int]:
         """Summarize a single chunk of story text.
         

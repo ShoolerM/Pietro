@@ -1,5 +1,8 @@
 """Main controller that coordinates all components."""
+import hashlib
 import sys
+import threading
+import time
 from PyQt5 import QtWidgets, QtCore
 
 from models.story_model import StoryModel
@@ -12,6 +15,13 @@ from views.main_view import MainView
 from controllers.prompt_controller import PromptController
 from controllers.llm_controller import LLMController
 from controllers.rag_controller import RAGController
+
+
+class NotesGeneratorSignals(QtCore.QObject):
+    """Signals for background notes generation."""
+    notes_chunk = QtCore.pyqtSignal(str)  # chunk of notes being streamed
+    notes_ready = QtCore.pyqtSignal(str, int)  # generated_notes, notes_tokens
+    notes_error = QtCore.pyqtSignal(str)  # error_message
 
 
 class MainController:
@@ -45,6 +55,9 @@ class MainController:
         # Track markdown content for rendering
         self._markdown_content = ""
         
+        # Track story content for notes regeneration
+        self._last_story_content_hash = None
+        
         # Connect view signals to handlers
         self._connect_signals()
         
@@ -75,7 +88,9 @@ class MainController:
         self.view.rag_summary_chunk_size_changed.connect(self.rag_model.set_summary_chunk_size)
         self.view.rag_settings_requested.connect(self._on_rag_settings_requested)
         self.view.prompt_selections_changed.connect(self._on_prompt_selections_changed)
-        self.view.settings_opened.connect(self._on_settings_opened)
+        self.view.summarization_prompt_requested.connect(self._on_summarization_prompt_requested)
+        self.view.notes_prompt_requested.connect(self._on_notes_prompt_requested)
+        self.view.general_settings_requested.connect(self._on_general_settings_requested)
         self.view.font_size_changed.connect(self._on_font_size_changed)
         self.view.inference_settings_requested.connect(self._on_inference_settings_requested)
         self.view.update_summary_requested.connect(self._on_update_summary_requested)
@@ -113,6 +128,80 @@ class MainController:
             self.view.set_build_with_rag_enabled(self.settings_model.build_with_rag)
         except Exception:
             pass
+    
+    def _generate_notes_background(self, story_context):
+        """Generate notes in background thread and update UI safely via signals.
+        
+        Args:
+            story_context: The current story content for notes generation
+        """
+        # Create signals object
+        signals = NotesGeneratorSignals()
+        
+        # Connect signals to UI update handlers
+        signals.notes_chunk.connect(self._on_notes_chunk)
+        signals.notes_ready.connect(self._on_notes_generated)
+        signals.notes_error.connect(self._on_notes_generation_error)
+        
+        def generate_in_thread():
+            try:
+                notes_prompt = self.settings_model.notes_prompt_template
+                
+                # Define callback for streaming chunks
+                def on_chunk(chunk):
+                    signals.notes_chunk.emit(chunk)
+                
+                generated_notes, notes_tokens = self.llm_controller.generate_notes(
+                    story_context, notes_prompt, on_chunk
+                )
+                signals.notes_ready.emit(generated_notes, notes_tokens)
+            except Exception as e:
+                print(f"Error generating notes: {e}")
+                signals.notes_error.emit(str(e))
+        
+        # Start background thread
+        thread = threading.Thread(target=generate_in_thread, daemon=True)
+        thread.start()
+    
+    def _on_notes_chunk(self, chunk):
+        """Handle streaming notes chunk (called on main thread via signal)."""
+        # Append chunk to notes section
+        self.view.prompts_panel.append_notes(chunk)
+    
+    def _on_notes_generated(self, generated_notes, notes_tokens):
+        """Handle notes generation completion (called on main thread via signal)."""
+        # Mark notes as LLM-generated (they've already been streamed in)
+        self.view.prompts_panel.mark_notes_as_llm_generated(generated_notes)
+        self.view.append_thinking_text(f"  ✓ Generated {notes_tokens} tokens of notes\n\n")
+        
+        # Continue with story generation if we have pending context
+        if hasattr(self, '_pending_notes_context'):
+            ctx = self._pending_notes_context
+            delattr(self, '_pending_notes_context')
+            # Continue with the story generation by calling _continue_send
+            self._continue_send(
+                ctx['user_input'],
+                ctx['notes'],
+                ctx['supp_text'],
+                ctx['system_prompt']
+            )
+        elif hasattr(self, '_pending_auto_build_context'):
+            ctx = self._pending_auto_build_context
+            delattr(self, '_pending_auto_build_context')
+            # Continue with auto-build mode
+            self._continue_auto_build(
+                ctx['initial_prompt'],
+                ctx['notes'],
+                ctx['supp_text'],
+                ctx['system_prompt']
+            )
+        else:
+            self.view.set_waiting(False)
+    
+    def _on_notes_generation_error(self, error_msg):
+        """Handle notes generation error (called on main thread via signal)."""
+        self.view.append_thinking_text(f"  ⚠ Error generating notes: {error_msg}\n\n")
+        self.view.set_waiting(False)
     
     def _on_settings_changed(self, event_type, data):
         """Handle settings model changes."""
@@ -171,6 +260,52 @@ class MainController:
             self._on_auto_build_story_requested(user_input, notes, supp_text, system_prompt)
             return
         
+        # Check if notes should be regenerated
+        story_context = self.view.get_story_content()
+        current_story_hash = hashlib.md5(story_context.encode()).hexdigest()
+        
+        # Regenerate notes if:
+        # 1. Story is NOT blank (has content), AND
+        # 2. Either story content has changed OR notes are unmodified LLM content
+        story_changed = (self._last_story_content_hash is not None and 
+                        current_story_hash != self._last_story_content_hash)
+        
+        should_regen = (self.settings_model.auto_notes and 
+                       story_context.strip() and  # Only if story has content
+                       (story_changed or self.view.prompts_panel.should_regenerate_notes()))
+        
+        if should_regen:
+            self.view.append_thinking_text("📝 Generating scene notes...\n")
+            self.view.set_waiting(True)
+            
+            # Clear notes section before regenerating
+            self.view.prompts_panel.clear_notes()
+            
+            # Store context to continue story generation after notes are ready
+            self._pending_notes_context = {
+                'user_input': user_input,
+                'notes': notes,
+                'supp_text': supp_text,
+                'system_prompt': system_prompt
+            }
+            
+            # Generate notes in background thread using signals for thread-safe UI updates
+            self._generate_notes_background(story_context)
+            
+            # Store current story hash for next comparison
+            self._last_story_content_hash = current_story_hash
+            
+            # Return here - will continue in _on_notes_generated callback
+            return
+        
+        # Store current story hash for next comparison
+        self._last_story_content_hash = current_story_hash
+        
+        # Continue with story generation
+        self._continue_send(user_input, notes, supp_text, system_prompt)
+    
+    def _continue_send(self, user_input, notes, supp_text, system_prompt):
+        """Continue with story generation (after notes are ready or if not needed)."""
         # Reset stop flag and enable stop button
         self.llm_model.reset_stop_flag()
         self.view.set_stop_enabled(True)
@@ -869,6 +1004,52 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
         if system_prompt is None:
             system_prompt = self.view.prompts_panel.get_system_prompt_text()
         
+        # Check if notes should be regenerated
+        story_context = self.view.get_story_content()
+        current_story_hash = hashlib.md5(story_context.encode()).hexdigest()
+        
+        # Regenerate notes if:
+        # 1. Story is NOT blank (has content), AND
+        # 2. Either story content has changed OR notes are unmodified LLM content
+        story_changed = (self._last_story_content_hash is not None and 
+                        current_story_hash != self._last_story_content_hash)
+        
+        should_regen = (self.settings_model.auto_notes and 
+                       story_context.strip() and  # Only if story has content
+                       (story_changed or self.view.prompts_panel.should_regenerate_notes()))
+        
+        if should_regen:
+            self.view.append_thinking_text("📝 Generating scene notes...\n")
+            self.view.set_waiting(True)
+            
+            # Clear notes section before regenerating
+            self.view.prompts_panel.clear_notes()
+            
+            # Store context to continue auto-build after notes are ready
+            self._pending_auto_build_context = {
+                'initial_prompt': initial_prompt,
+                'notes': notes,
+                'supp_text': supp_text,
+                'system_prompt': system_prompt
+            }
+            
+            # Generate notes in background thread using signals for thread-safe UI updates
+            self._generate_notes_background(story_context)
+            
+            # Store current story hash for next comparison
+            self._last_story_content_hash = current_story_hash
+            
+            # Return here - will continue in _on_notes_generated callback
+            return
+        
+        # Store current story hash for next comparison
+        self._last_story_content_hash = current_story_hash
+        
+        # Continue with auto-build mode
+        self._continue_auto_build(initial_prompt, notes, supp_text, system_prompt)
+    
+    def _continue_auto_build(self, initial_prompt, notes, supp_text, system_prompt):
+        """Continue with auto-build mode (after notes are ready or if not needed)."""
         # Reset stop flag and enable stop button
         self.llm_model.reset_stop_flag()
         self.view.set_stop_enabled(True)
@@ -925,7 +1106,9 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
             self.view.append_thinking_text(f"Generated {state['chunk_count']} chunks total.\n")
             self.view.append_thinking_text(f"{'='*60}\n")
             self.view.set_stop_enabled(False)
-            self.view.render_markdown()
+            # Render markdown
+            self._markdown_content = self.view.get_story_content()
+            self.view.render_story_markdown(self._markdown_content)
             return
         
         if self.llm_model.stop_generation:
@@ -934,7 +1117,9 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
             self.view.append_thinking_text(f"Generated {state['chunk_count']} chunks.\n")
             self.view.append_thinking_text(f"{'='*60}\n")
             self.view.set_stop_enabled(False)
-            self.view.render_markdown()
+            # Render markdown
+            self._markdown_content = self.view.get_story_content()
+            self.view.render_story_markdown(self._markdown_content)
             return
         
         state['chunk_count'] += 1
@@ -1094,7 +1279,9 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
             self.view.append_thinking_text(f"Generated {state['chunk_count']} chunks.\n")
             self.view.append_thinking_text(f"{'='*60}\n")
             self.view.set_stop_enabled(False)
-            self.view.render_markdown()
+            # Render markdown
+            self._markdown_content = self.view.get_story_content()
+            self.view.render_story_markdown(self._markdown_content)
             return
         
         self.view.append_thinking_text(f"\n✅ Chunk {state['chunk_count']} complete!\n")
@@ -1118,7 +1305,9 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
             self.view.append_thinking_text(f"Generated {state['chunk_count']} chunks.\n")
             self.view.append_thinking_text(f"{'='*60}\n")
             self.view.set_stop_enabled(False)
-            self.view.render_markdown()
+            # Render markdown
+            self._markdown_content = self.view.get_story_content()
+            self.view.render_story_markdown(self._markdown_content)
             return
         
         self.view.append_thinking_text(f"\n✅ Summarization complete ({tokens} tokens)\n")
@@ -1133,16 +1322,43 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
         self.view.append_thinking_text(f"Auto-build stopped.\n")
         self.view.set_stop_enabled(False)
     
-    def _on_settings_opened(self):
-        """Handle settings menu action."""
-        saved, new_prompt = self.view.show_settings_dialog(
+    def _on_summarization_prompt_requested(self):
+        """Handle summarization prompt settings menu action."""
+        saved, new_prompt = self.view.show_summarization_prompt_dialog(
             self.settings_model.summary_prompt_template
         )
         
         if saved and new_prompt is not None:
             success = self.settings_model.save_summary_prompt(new_prompt)
             if not success:
-                self.view.show_warning("Save Error", "Failed to save summary prompt")
+                self.view.show_warning("Save Error", "Failed to save summarization prompt")
+    
+    def _on_notes_prompt_requested(self):
+        """Handle notes prompt settings menu action."""
+        saved, new_prompt = self.view.show_notes_prompt_dialog(
+            self.settings_model.notes_prompt_template
+        )
+        
+        if saved and new_prompt is not None:
+            success = self.settings_model.save_notes_prompt(new_prompt)
+            if not success:
+                self.view.show_warning("Save Error", "Failed to save notes prompt")
+    
+    def _on_general_settings_requested(self):
+        """Handle general settings menu action."""
+        saved, auto_notes = self.view.show_general_settings_dialog(
+            self.settings_model.auto_notes
+        )
+        
+        if saved and auto_notes is not None:
+            self.settings_model.auto_notes = auto_notes
+            print(f"✓ Auto Notes: {'enabled' if auto_notes else 'disabled'}")
+    
+    def _on_settings_opened(self):
+        """Handle settings menu action.
+        DEPRECATED: Use _on_summarization_prompt_requested instead.
+        """
+        self._on_summarization_prompt_requested()
     
     def _on_rag_settings_requested(self):
         """Handle RAG settings dialog request."""

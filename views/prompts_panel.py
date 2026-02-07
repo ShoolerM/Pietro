@@ -127,6 +127,12 @@ class PromptsPanel(QtWidgets.QWidget):
     
     def __init__(self):
         super().__init__()
+        
+        # Notes tracking for modification detection
+        self._notes_last_set_by_llm = False
+        self._notes_llm_content = ""
+        self._notes_content_hash = None  # Hash of last LLM-generated content
+        
         self._init_ui()
     
     def _init_ui(self):
@@ -172,9 +178,14 @@ class PromptsPanel(QtWidgets.QWidget):
         notes_layout.setContentsMargins(5, 5, 5, 5)
         
         self.notes_text = QtWidgets.QTextEdit()
-        self.notes_text.setAcceptRichText(False)
-        self.notes_text.setPlaceholderText('Add notes here for LLM context (e.g., character details, plot points, reminders)...\nAdded to LLM context.')
+        self.notes_text.setAcceptRichText(True)
+        self.notes_text.setMarkdown('')  # Enable markdown support
+        self.notes_text.setPlaceholderText('Add notes here for LLM context (e.g., character details, plot points, reminders)...\nAdded to LLM context.\nSupports Markdown formatting.')
         self.notes_text.installEventFilter(self)
+        
+        # Track user modifications to notes
+        self.notes_text.textChanged.connect(self._on_notes_text_changed)
+        
         notes_layout.addWidget(self.notes_text)
         
         notes_tab.setLayout(notes_layout)
@@ -523,6 +534,115 @@ class PromptsPanel(QtWidgets.QWidget):
     def get_notes_text(self):
         """Get the current notes text for LLM context."""
         return self.notes_text.toPlainText()
+    
+    def clear_notes(self):
+        """Clear the notes section and reset tracking state."""
+        self.notes_text.textChanged.disconnect(self._on_notes_text_changed)
+        self.notes_text.clear()
+        self.notes_text.textChanged.connect(self._on_notes_text_changed)
+        self._notes_last_set_by_llm = False
+        self._notes_content_hash = None
+        self._notes_llm_content = ""
+    
+    def set_notes_from_llm(self, text: str):
+        """Set notes text from LLM generation, marking it as LLM-generated.
+        
+        Args:
+            text: The LLM-generated notes content
+        """
+        # Temporarily disconnect signal to avoid triggering user-modification detection
+        self.notes_text.textChanged.disconnect(self._on_notes_text_changed)
+        
+        import hashlib
+        
+        self._notes_last_set_by_llm = True
+        self._notes_llm_content = text
+        # Compute hash of the content for modification detection
+        self._notes_content_hash = hashlib.md5(text.encode()).hexdigest()
+        self.notes_text.setMarkdown(text)  # Use markdown rendering
+        
+        # Reconnect signal
+        self.notes_text.textChanged.connect(self._on_notes_text_changed)
+    
+    def append_notes(self, text: str):
+        """Append text chunk to notes (for streaming).
+        
+        Args:
+            text: Text chunk to append
+        """
+        # Temporarily disconnect signal to avoid triggering user-modification detection
+        self.notes_text.textChanged.disconnect(self._on_notes_text_changed)
+        
+        # Move cursor to end and insert text
+        cursor = self.notes_text.textCursor()
+        cursor.movePosition(cursor.End)
+        cursor.insertText(text)
+        self.notes_text.setTextCursor(cursor)
+        
+        # Ensure the cursor is visible
+        self.notes_text.ensureCursorVisible()
+        
+        # Reconnect signal
+        self.notes_text.textChanged.connect(self._on_notes_text_changed)
+    
+    def mark_notes_as_llm_generated(self, text: str):
+        """Mark the current notes as LLM-generated after streaming completes.
+        
+        Args:
+            text: The complete LLM-generated notes content
+        """
+        import hashlib
+        
+        self._notes_last_set_by_llm = True
+        self._notes_llm_content = text
+        # Compute hash of the content for modification detection
+        self._notes_content_hash = hashlib.md5(text.encode()).hexdigest()
+    
+    def is_notes_user_modified(self) -> bool:
+        """Check if notes have been modified by the user since last LLM generation.
+        
+        Returns:
+            True if user has modified the notes or if notes were never LLM-generated
+        """
+        if not self._notes_last_set_by_llm:
+            # User-created content or blank - consider as user-modified
+            return True
+        
+        current_text = self.notes_text.toPlainText()
+        # Check if current text differs from last LLM-generated content
+        return current_text != self._notes_llm_content
+    
+    def _on_notes_text_changed(self):
+        """Handle notes text changes to detect user modifications."""
+        if self._notes_last_set_by_llm:
+            current_text = self.notes_text.toPlainText()
+            # If text has changed from LLM content, mark as user-modified
+            if current_text != self._notes_llm_content:
+                self._notes_last_set_by_llm = False
+    
+    def should_regenerate_notes(self) -> bool:
+        """Check if notes should be regenerated (blank or unmodified LLM content).
+        
+        Returns:
+            True if notes are blank or LLM-generated and unmodified (hash match)
+        """
+        import hashlib
+        
+        current_text = self.notes_text.toPlainText()
+        
+        # Always regenerate if notes are blank
+        if not current_text.strip():
+            return True
+        
+        # Check if notes are LLM-generated and haven't been modified by comparing hash
+        if self._notes_last_set_by_llm and self._notes_content_hash:
+            # Compute hash of current text
+            current_hash = hashlib.md5(current_text.encode()).hexdigest()
+            # If hash matches, notes are unmodified LLM content - should regenerate
+            return current_hash == self._notes_content_hash
+        
+        # Notes were user-created or modified - preserve them
+        return False
     
     def get_system_prompt_text(self):
         """Read the checked system prompt file and return its contents."""
