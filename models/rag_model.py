@@ -32,6 +32,7 @@ class RAGModel(Observable):
         self.similarity_threshold = 0.0  # Default: no filtering
         self.max_docs = 3  # Default: retrieve 3 chunks per database
         self.max_chunks = 10  # Default: auto-build chunks
+        self.summary_chunk_size = 1500  # Default: max raw tokens for summarization
         
         # Load databases and settings
         self._load_data()
@@ -51,6 +52,14 @@ class RAGModel(Observable):
                     self.similarity_threshold = settings.get('similarity_threshold', 0.0)
                     self.max_docs = settings.get('max_docs', 3)
                     self.max_chunks = settings.get('max_chunks', 10)
+                    self.summary_chunk_size = settings.get('summary_chunk_size', 1500)
+
+                    # Persist missing settings keys for older files
+                    if any(
+                        key not in settings
+                        for key in ['similarity_threshold', 'max_docs', 'max_chunks', 'summary_chunk_size']
+                    ):
+                        self._save_data()
                     
                     # Load selected databases
                     selected_list = data.get('selected_databases', [])
@@ -63,13 +72,15 @@ class RAGModel(Observable):
                     self.similarity_threshold = 0.0
                     self.max_docs = 3
                     self.max_chunks = 10
+                    self.summary_chunk_size = 1500
                     # Save in new format immediately
                     self._save_data()
                     print("Migration complete!")
                 
                 print(
                     f"Loaded RAG settings: threshold={self.similarity_threshold}, "
-                    f"max_docs={self.max_docs}, max_chunks={self.max_chunks}"
+                    f"max_docs={self.max_docs}, max_chunks={self.max_chunks}, "
+                    f"summary_chunk_size={self.summary_chunk_size}"
                 )
                 if self._selected_databases:
                     print(f"Loaded selected databases: {list(self._selected_databases)}")
@@ -85,7 +96,8 @@ class RAGModel(Observable):
                 'settings': {
                     'similarity_threshold': self.similarity_threshold,
                     'max_docs': self.max_docs,
-                    'max_chunks': self.max_chunks
+                    'max_chunks': self.max_chunks,
+                    'summary_chunk_size': self.summary_chunk_size
                 },
                 'selected_databases': list(self._selected_databases)
             }
@@ -263,4 +275,14 @@ class RAGModel(Observable):
         self.max_chunks = max(1, min(50, max_chunks))
         self._save_data()  # Save settings to persist
         print(f"RAG max chunks set to: {self.max_chunks}")
+
+    def set_summary_chunk_size(self, chunk_size):
+        """Set the max raw token chunk size used for story summarization.
+
+        Args:
+            chunk_size: Integer between 256 and 200000
+        """
+        self.summary_chunk_size = max(256, min(200000, int(chunk_size)))
+        self._save_data()
+        print(f"RAG summary chunk size set to: {self.summary_chunk_size}")
 

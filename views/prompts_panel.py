@@ -120,6 +120,7 @@ class PromptsPanel(QtWidgets.QWidget):
     rag_similarity_threshold_changed = QtCore.pyqtSignal(float)  # threshold value
     rag_max_docs_changed = QtCore.pyqtSignal(int)  # max documents per database
     rag_max_chunks_changed = QtCore.pyqtSignal(int)  # max chunks for auto-build
+    rag_summary_chunk_size_changed = QtCore.pyqtSignal(int)  # max raw tokens for summarization
     rag_settings_requested = QtCore.pyqtSignal()  # request to show settings dialog
     prompt_selections_changed = QtCore.pyqtSignal(list, str)  # supplemental_files, system_prompt
     font_size_changed = QtCore.pyqtSignal(int)  # delta
@@ -657,13 +658,14 @@ class PromptsPanel(QtWidgets.QWidget):
             import traceback
             traceback.print_exc()
     
-    def show_rag_settings_dialog(self, current_max_docs=3, current_threshold=0.0, current_max_chunks=10):
+    def show_rag_settings_dialog(self, current_max_docs=3, current_threshold=0.0, current_max_chunks=10, current_summary_chunk_size=1500):
         """Show RAG settings dialog with current values.
         
         Args:
             current_max_docs: Current max documents setting
             current_threshold: Current similarity threshold setting
             current_max_chunks: Current max chunks setting
+            current_summary_chunk_size: Current summarization chunk size
         """
         # Create dialog
         dialog = QtWidgets.QDialog(self)
@@ -673,11 +675,11 @@ class PromptsPanel(QtWidgets.QWidget):
         layout = QtWidgets.QVBoxLayout()
 
         # === Max Chunks Section ===
-        max_chunks_group = QtWidgets.QGroupBox('Maximum Chunks (Auto-Build)')
+        max_chunks_group = QtWidgets.QGroupBox('Generated Chunk Amount (Auto-Build)')
         max_chunks_layout = QtWidgets.QVBoxLayout()
 
         max_chunks_desc = QtWidgets.QLabel(
-            'Maximum number of chunks to generate during auto-build RAG mode.\n'
+            'Number of chunks to generate during auto-build RAG mode.\n'
             'Default: 10'
         )
         max_chunks_desc.setWordWrap(True)
@@ -697,10 +699,9 @@ class PromptsPanel(QtWidgets.QWidget):
 
         max_chunks_layout.addLayout(max_chunks_input_layout)
         max_chunks_group.setLayout(max_chunks_layout)
-        layout.addWidget(max_chunks_group)
         
         # === Max Documents Section ===
-        max_docs_group = QtWidgets.QGroupBox('Maximum Documents per Database')
+        max_docs_group = QtWidgets.QGroupBox('Maximum Documents per Retrieval')
         max_docs_layout = QtWidgets.QVBoxLayout()
         
         max_docs_desc = QtWidgets.QLabel(
@@ -724,7 +725,34 @@ class PromptsPanel(QtWidgets.QWidget):
         
         max_docs_layout.addLayout(max_docs_input_layout)
         max_docs_group.setLayout(max_docs_layout)
-        layout.addWidget(max_docs_group)
+
+        # === Summarization Chunk Size Section ===
+        summary_group = QtWidgets.QGroupBox('Summarization Chunk Size')
+        summary_layout = QtWidgets.QVBoxLayout()
+
+        summary_desc = QtWidgets.QLabel(
+            'Maximum raw token chunk size used when summarizing the story.\n'
+            'Larger values keep more recent story content before summarizing.\n'
+            'Default: 1500'
+        )
+        summary_desc.setWordWrap(True)
+        summary_layout.addWidget(summary_desc)
+
+        summary_input_layout = QtWidgets.QHBoxLayout()
+        summary_label = QtWidgets.QLabel('Max Raw Tokens:')
+        summary_input_layout.addWidget(summary_label)
+
+        summary_spinbox = QtWidgets.QSpinBox()
+        summary_spinbox.setMinimum(256)
+        summary_spinbox.setMaximum(200000)
+        summary_spinbox.setSingleStep(256)
+        summary_spinbox.setValue(current_summary_chunk_size)
+        summary_spinbox.setToolTip('Max raw tokens kept before summarizing (256-200000)')
+        summary_input_layout.addWidget(summary_spinbox)
+        summary_input_layout.addStretch()
+
+        summary_layout.addLayout(summary_input_layout)
+        summary_group.setLayout(summary_layout)
 
         
         # === Similarity Threshold Section ===
@@ -759,7 +787,6 @@ class PromptsPanel(QtWidgets.QWidget):
         
         threshold_layout.addLayout(slider_layout)
         threshold_group.setLayout(threshold_layout)
-        layout.addWidget(threshold_group)
         
         # Update label when slider changes
         def update_label(value):
@@ -773,6 +800,13 @@ class PromptsPanel(QtWidgets.QWidget):
         )
         button_box.accepted.connect(dialog.accept)
         button_box.rejected.connect(dialog.reject)
+        
+        
+        
+        layout.addWidget(max_chunks_group)
+        layout.addWidget(summary_group)
+        layout.addWidget(max_docs_group)
+        layout.addWidget(threshold_group)
         layout.addWidget(button_box)
         
         dialog.setLayout(layout)
@@ -781,12 +815,15 @@ class PromptsPanel(QtWidgets.QWidget):
         if dialog.exec_() == QtWidgets.QDialog.Accepted:
             max_docs = max_docs_spinbox.value()
             max_chunks = max_chunks_spinbox.value()
+            summary_chunk_size = summary_spinbox.value()
             threshold = slider.value() / 100.0
             print(f"RAG max documents set to: {max_docs}")
             print(f"RAG max chunks set to: {max_chunks}")
+            print(f"RAG summary chunk size set to: {summary_chunk_size}")
             print(f"RAG similarity threshold set to: {threshold}")
             self.rag_max_docs_changed.emit(max_docs)
             self.rag_max_chunks_changed.emit(max_chunks)
+            self.rag_summary_chunk_size_changed.emit(summary_chunk_size)
             self.rag_similarity_threshold_changed.emit(threshold)
     
     def show_warning(self, title, message):

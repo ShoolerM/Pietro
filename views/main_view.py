@@ -32,6 +32,7 @@ class MainView(QtWidgets.QWidget):
     rag_similarity_threshold_changed = QtCore.pyqtSignal(float)  # threshold value
     rag_max_docs_changed = QtCore.pyqtSignal(int)  # max documents per database
     rag_max_chunks_changed = QtCore.pyqtSignal(int)  # max chunks for auto-build
+    rag_summary_chunk_size_changed = QtCore.pyqtSignal(int)  # max raw tokens for summarization
     rag_settings_requested = QtCore.pyqtSignal()  # request to show settings dialog
     prompt_selections_changed = QtCore.pyqtSignal(list, str)  # supplemental_files, system_prompt
     settings_opened = QtCore.pyqtSignal()
@@ -162,6 +163,7 @@ class MainView(QtWidgets.QWidget):
         self.prompts_panel.rag_similarity_threshold_changed.connect(self.rag_similarity_threshold_changed.emit)
         self.prompts_panel.rag_max_docs_changed.connect(self.rag_max_docs_changed.emit)
         self.prompts_panel.rag_max_chunks_changed.connect(self.rag_max_chunks_changed.emit)
+        self.prompts_panel.rag_summary_chunk_size_changed.connect(self.rag_summary_chunk_size_changed.emit)
         self.prompts_panel.rag_settings_requested.connect(self.rag_settings_requested.emit)
         self.prompts_panel.prompt_selections_changed.connect(self.prompt_selections_changed.emit)
         self.prompts_panel.font_size_changed.connect(self.font_size_changed.emit)
@@ -326,12 +328,13 @@ class MainView(QtWidgets.QWidget):
         self.prompts_panel.apply_font_size(size)
         self.control_panel.apply_font_size(size)
     
-    def show_rag_settings_dialog(self, current_max_docs=3, current_threshold=0.0, current_max_chunks=10):
+    def show_rag_settings_dialog(self, current_max_docs=3, current_threshold=0.0, current_max_chunks=10, current_summary_chunk_size=1500):
         """Show RAG settings dialog with current values."""
         return self.prompts_panel.show_rag_settings_dialog(
             current_max_docs=current_max_docs,
             current_threshold=current_threshold,
-            current_max_chunks=current_max_chunks
+            current_max_chunks=current_max_chunks,
+            current_summary_chunk_size=current_summary_chunk_size
         )
     
     def show_inference_settings_dialog(self, current_ip='192.168.0.1', current_port=1234):

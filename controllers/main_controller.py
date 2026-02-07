@@ -72,6 +72,7 @@ class MainController:
         self.view.rag_similarity_threshold_changed.connect(self.rag_model.set_similarity_threshold)
         self.view.rag_max_docs_changed.connect(self.rag_model.set_max_docs)
         self.view.rag_max_chunks_changed.connect(self.rag_model.set_max_chunks)
+        self.view.rag_summary_chunk_size_changed.connect(self.rag_model.set_summary_chunk_size)
         self.view.rag_settings_requested.connect(self._on_rag_settings_requested)
         self.view.prompt_selections_changed.connect(self._on_prompt_selections_changed)
         self.view.settings_opened.connect(self._on_settings_opened)
@@ -251,7 +252,7 @@ class MainController:
         max_rolling_summary_tokens = min(1000, int(available_for_story * 0.4))
         
         # Remaining space for raw recent content
-        max_raw_tokens = min(1500, available_for_story - max_rolling_summary_tokens)
+        max_raw_tokens = min(self.rag_model.summary_chunk_size, available_for_story - max_rolling_summary_tokens)
         
         if max_raw_tokens < 0:
             max_raw_tokens = 500  # Emergency minimum
@@ -498,7 +499,7 @@ class MainController:
         user_tokens = self.story_model.estimate_token_count(ctx['user_input'])
         system_tokens = self.story_model.estimate_token_count(ctx['system_prompt'])
         fixed_costs = supp_tokens + notes_tokens + user_tokens + system_tokens + 500
-        max_raw_tokens = context_limit - fixed_costs
+        max_raw_tokens = min(self.rag_model.summary_chunk_size, context_limit - fixed_costs)
         
         story_for_llm, _ = self.story_model.extract_recent_content(
             current_story, max_raw_tokens
@@ -790,7 +791,7 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
         max_rolling_summary_tokens = min(1000, int(available_for_story * 0.4))
         
         # Remaining space for raw recent content
-        max_raw_tokens = min(1500, available_for_story - max_rolling_summary_tokens)
+        max_raw_tokens = min(self.rag_model.summary_chunk_size, available_for_story - max_rolling_summary_tokens)
         
         if max_raw_tokens < 0:
             max_raw_tokens = 500  # Emergency minimum
@@ -1013,7 +1014,7 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
         story_tokens = self.story_model.estimate_token_count(current_story)
         fixed_costs = supp_tokens + notes_tokens + system_tokens + safety_buffer
         available_for_story = context_limit - fixed_costs
-        max_raw_tokens = min(1500, int(available_for_story * 0.6))
+        max_raw_tokens = min(self.rag_model.summary_chunk_size, int(available_for_story * 0.6))
         
         if story_tokens > max_raw_tokens and current_story:
             self.view.append_thinking_text(f"\n📊 Story getting large ({story_tokens} tokens)\n")
@@ -1149,7 +1150,8 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
         self.view.show_rag_settings_dialog(
             current_max_docs=self.rag_model.max_docs,
             current_threshold=self.rag_model.similarity_threshold,
-            current_max_chunks=self.rag_model.max_chunks
+            current_max_chunks=self.rag_model.max_chunks,
+            current_summary_chunk_size=self.rag_model.summary_chunk_size
         )
     
     def _on_inference_settings_requested(self):
