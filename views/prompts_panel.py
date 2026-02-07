@@ -132,6 +132,14 @@ class PromptsPanel(QtWidgets.QWidget):
         self._notes_last_set_by_llm = False
         self._notes_llm_content = ""
         self._notes_content_hash = None  # Hash of last LLM-generated content
+        self._notes_streaming_content = ""  # Accumulates content during streaming
+        self._notes_update_pending = False  # Flag for pending markdown update
+        
+        # Timer for throttled markdown updates during streaming
+        self._notes_update_timer = QtCore.QTimer()
+        self._notes_update_timer.setSingleShot(True)
+        self._notes_update_timer.setInterval(100)  # Update every 100ms
+        self._notes_update_timer.timeout.connect(self._apply_notes_markdown_update)
         
         self._init_ui()
     
@@ -543,6 +551,7 @@ class PromptsPanel(QtWidgets.QWidget):
         self._notes_last_set_by_llm = False
         self._notes_content_hash = None
         self._notes_llm_content = ""
+        self._notes_streaming_content = ""  # Reset streaming accumulator
     
     def set_notes_from_llm(self, text: str):
         """Set notes text from LLM generation, marking it as LLM-generated.
@@ -565,25 +574,41 @@ class PromptsPanel(QtWidgets.QWidget):
         self.notes_text.textChanged.connect(self._on_notes_text_changed)
     
     def append_notes(self, text: str):
-        """Append text chunk to notes (for streaming).
+        """Append text chunk to notes (for streaming) with throttled markdown rendering.
         
         Args:
             text: Text chunk to append
         """
+        # Accumulate the streaming content
+        self._notes_streaming_content += text
+        self._notes_update_pending = True
+        
+        # Start/restart the timer for throttled updates
+        # This ensures we only re-render markdown every 100ms, not on every chunk
+        if not self._notes_update_timer.isActive():
+            self._notes_update_timer.start()
+    
+    def _apply_notes_markdown_update(self):
+        """Apply pending markdown update to notes (called by timer)."""
+        if not self._notes_update_pending:
+            return
+        
         # Temporarily disconnect signal to avoid triggering user-modification detection
         self.notes_text.textChanged.disconnect(self._on_notes_text_changed)
         
-        # Move cursor to end and insert text
+        # Render the accumulated content as markdown
+        self.notes_text.setMarkdown(self._notes_streaming_content)
+        
+        # Move cursor to end to show latest content
         cursor = self.notes_text.textCursor()
         cursor.movePosition(cursor.End)
-        cursor.insertText(text)
         self.notes_text.setTextCursor(cursor)
-        
-        # Ensure the cursor is visible
         self.notes_text.ensureCursorVisible()
         
         # Reconnect signal
         self.notes_text.textChanged.connect(self._on_notes_text_changed)
+        
+        self._notes_update_pending = False
     
     def mark_notes_as_llm_generated(self, text: str):
         """Mark the current notes as LLM-generated after streaming completes.
@@ -592,6 +617,11 @@ class PromptsPanel(QtWidgets.QWidget):
             text: The complete LLM-generated notes content
         """
         import hashlib
+        
+        # Stop the timer and apply any final pending update
+        self._notes_update_timer.stop()
+        if self._notes_update_pending:
+            self._apply_notes_markdown_update()
         
         self._notes_last_set_by_llm = True
         self._notes_llm_content = text
