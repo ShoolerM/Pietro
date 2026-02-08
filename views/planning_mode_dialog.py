@@ -164,6 +164,9 @@ class PlanningModeDialog(QtWidgets.QDialog):
         self.llm_token_received.connect(self._on_llm_token, QtCore.Qt.QueuedConnection)
         self.llm_response_complete.connect(self._on_llm_response_complete, QtCore.Qt.QueuedConnection)
         self.set_waiting.connect(self._set_waiting_state, QtCore.Qt.QueuedConnection)
+
+        # Enable Start Writing when outline content changes (manual edits allowed)
+        self.outline_display.textChanged.connect(self._update_start_writing_state)
         
         # Enable starting to write only when there's outline content
         self.start_writing_button.setEnabled(False)
@@ -179,6 +182,10 @@ class PlanningModeDialog(QtWidgets.QDialog):
         
         # Clear input field
         self.user_input_field.clear()
+
+        # Reset per-response accumulators
+        self._current_llm_response = ""
+        self._current_llm_response_chunk = ""
         
         # Emit signal for controller to handle LLM response
         self.user_input_ready.emit(user_text)
@@ -235,7 +242,8 @@ class PlanningModeDialog(QtWidgets.QDialog):
             full_response: The complete response from LLM
         """
         # Check if response is an outline (starts with dash and checkbox)
-        clean_response = self._current_llm_response.strip()
+        response_text = full_response if full_response is not None else self._current_llm_response
+        clean_response = response_text.strip()
         if clean_response.startswith('- ['):
             # This is an outline - update outline display (don't show in conversation)
             self.set_outline_from_llm(clean_response)
@@ -243,10 +251,12 @@ class PlanningModeDialog(QtWidgets.QDialog):
             self._append_conversation("Assistant: Outline generated! Review it on the right and click 'Start Writing' when ready.", is_user=False)
         else:
             # This is a regular response - display in conversation
-            self._append_conversation(f"Assistant: {self._current_llm_response_chunk}", is_user=False)
+            display_text = self._current_llm_response_chunk.strip() or clean_response
+            self._append_conversation(f"Assistant: {display_text}", is_user=False)
         
         # Reset chunk accumulator for next response
         self._current_llm_response_chunk = ""
+        self._current_llm_response = ""
     
     def _set_waiting_state(self, waiting):
         """Set the waiting state (thread-safe via signal).
@@ -294,8 +304,12 @@ class PlanningModeDialog(QtWidgets.QDialog):
         self.outline_display.setPlainText(outline_text)
         
         # Enable Start Writing button when we have an outline
-        if outline_text.strip():
-            self.start_writing_button.setEnabled(True)
+        self._update_start_writing_state()
+
+    def _update_start_writing_state(self):
+        """Enable Start Writing button when outline is non-empty."""
+        outline_text = self.outline_display.toPlainText().strip()
+        self.start_writing_button.setEnabled(bool(outline_text))
     
     def get_conversation_text(self):
         """Get the full conversation text.

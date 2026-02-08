@@ -528,13 +528,16 @@ class RAGController:
         print(f"\n{'='*80}")
         print(f"RAG QUERY: {query[:100]}{'...' if len(query) > 100 else ''}")
         print(f"Selected Databases: {', '.join(selected_dbs)}")
-        print(f"Max Documents per Database: {top_k}")
+        print(f"Max Documents (total): {top_k}")
         print(f"Similarity Threshold: {self.model.similarity_threshold}")
         print(f"{'='*80}")
         
         try:
             all_results = []
             
+            # Distribute total top_k across databases to avoid N-per-DB behavior
+            per_db_k = max(1, int((top_k + len(selected_dbs) - 1) / len(selected_dbs)))
+
             # Query each selected database
             for db_name in selected_dbs:
                 vectorstore = self._load_vectorstore(db_name)
@@ -544,7 +547,7 @@ class RAGController:
                 
                 try:
                     # Query vectorstore with similarity search
-                    docs_with_scores = vectorstore.similarity_search_with_score(query, k=top_k)
+                    docs_with_scores = vectorstore.similarity_search_with_score(query, k=per_db_k)
                     
                     if docs_with_scores:
                         print(f"\n--- Results from '{db_name}' ---")
@@ -588,6 +591,10 @@ class RAGController:
             
             # Sort by score (lower is better for FAISS distance)
             all_results.sort(key=lambda x: x[1])
+
+            # Trim to total top_k
+            if top_k is not None and len(all_results) > top_k:
+                all_results = all_results[:top_k]
             
             # Combine results - use simple separator without "RAG" label
             # to avoid LLM incorporating the label into its response
