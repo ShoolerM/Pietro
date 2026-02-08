@@ -144,6 +144,10 @@ class StoryPanel(QtWidgets.QWidget):
         else:
             # No search widget for this tab (shouldn't happen but handle gracefully)
             pass
+
+    def isReadOnly(self):
+        """Return read-only state of the story text editor."""
+        return self.story_text.isReadOnly()
     
     def _show_context_menu(self, position):
         """Show context menu for the story text widget."""
