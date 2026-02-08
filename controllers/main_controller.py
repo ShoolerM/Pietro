@@ -213,6 +213,15 @@ class MainController:
                 ctx['supp_text'],
                 ctx['system_prompt']
             )
+        elif hasattr(self, '_pending_planning_notes_continue'):
+            delattr(self, '_pending_planning_notes_continue')
+            try:
+                if hasattr(self, '_planning_build_state'):
+                    self._planning_build_state['notes'] = generated_notes
+            except Exception:
+                pass
+            self.view.set_waiting(False)
+            self._generate_next_planning_chunk()
         else:
             self.view.set_waiting(False)
     
@@ -1878,6 +1887,27 @@ If you're providing an outline, format it ONLY as a checklist with no other text
             state['task_chunk_count'] = 0
         else:
             self.view.append_logs(f"  • Continuing with current plot point...\n")
+
+        # Regenerate notes during planning mode if needed
+        story_context = current_story
+        current_story_hash = hashlib.md5(story_context.encode()).hexdigest()
+        story_changed = (self._last_story_content_hash is not None and
+                        current_story_hash != self._last_story_content_hash)
+
+        should_regen = (self.settings_model.auto_notes and
+                       story_context.strip() and
+                       (story_changed or self.view.prompts_panel.should_regenerate_notes()))
+
+        if should_regen:
+            self.view.append_logs("📝 Generating scene notes...\n")
+            self.view.set_waiting(True)
+            self.view.prompts_panel.clear_notes()
+            self._pending_planning_notes_continue = True
+            self._last_story_content_hash = current_story_hash
+            self._generate_notes_background(story_context)
+            return
+
+        self._last_story_content_hash = current_story_hash
         
         # Generate next chunk after a brief moment
         from PyQt5 import QtCore
