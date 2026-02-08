@@ -179,7 +179,7 @@ class MainController:
         """Handle notes generation completion (called on main thread via signal)."""
         # Mark notes as LLM-generated (they've already been streamed in)
         self.view.prompts_panel.mark_notes_as_llm_generated(generated_notes)
-        self.view.append_thinking_text(f"  ✓ Generated {notes_tokens} tokens of notes\n\n")
+        self.view.append_logs(f"  ✓ Generated {notes_tokens} tokens of notes\n\n")
         
         # Continue with story generation if we have pending context
         if hasattr(self, '_pending_notes_context'):
@@ -207,7 +207,7 @@ class MainController:
     
     def _on_notes_generation_error(self, error_msg):
         """Handle notes generation error (called on main thread via signal)."""
-        self.view.append_thinking_text(f"  ⚠ Error generating notes: {error_msg}\n\n")
+        self.view.append_logs(f"  ⚠ Error generating notes: {error_msg}\n\n")
         self.view.set_waiting(False)
     
     def _condense_prompts_background(self):
@@ -221,7 +221,7 @@ class MainController:
         signals = CondenserSignals()
         
         # Connect signals to UI update handlers
-        signals.thinking_update.connect(self.view.append_thinking_text)
+        signals.thinking_update.connect(self.view.append_logs)
         signals.condense_ready.connect(self._on_condense_ready)
         signals.condense_error.connect(self._on_condense_error)
         
@@ -283,7 +283,7 @@ class MainController:
     
     def _on_condense_error(self, error_msg):
         """Handle prompt condensing error (called on main thread via signal)."""
-        self.view.append_thinking_text(f"  ⚠ Error condensing prompts: {error_msg}\n\n")
+        self.view.append_logs(f"  ⚠ Error condensing prompts: {error_msg}\n\n")
         self.view.set_waiting(False)
         
         # Continue with original uncondensed prompts
@@ -378,7 +378,7 @@ class MainController:
                        (story_changed or self.view.prompts_panel.should_regenerate_notes()))
         
         if should_regen:
-            self.view.append_thinking_text("📝 Generating scene notes...\n")
+            self.view.append_logs("📝 Generating scene notes...\n")
             self.view.set_waiting(True)
             
             # Clear notes section before regenerating
@@ -444,19 +444,19 @@ class MainController:
         
         if supp_tokens > max_supp_tokens and supp_text:
             needs_condensing = True
-            self.view.append_thinking_text(f"\n⚠️ Supplemental prompts too large ({supp_tokens} > {max_supp_tokens} tokens)\n")
+            self.view.append_logs(f"\n⚠️ Supplemental prompts too large ({supp_tokens} > {max_supp_tokens} tokens)\n")
         
         if system_tokens > max_system_tokens and system_prompt:
             needs_condensing = True
-            self.view.append_thinking_text(f"⚠️ System prompt too large ({system_tokens} > {max_system_tokens} tokens)\n")
+            self.view.append_logs(f"⚠️ System prompt too large ({system_tokens} > {max_system_tokens} tokens)\n")
         
         if notes_tokens > max_notes_tokens and notes:
             needs_condensing = True
-            self.view.append_thinking_text(f"⚠️ Notes too large ({notes_tokens} > {max_notes_tokens} tokens)\n")
+            self.view.append_logs(f"⚠️ Notes too large ({notes_tokens} > {max_notes_tokens} tokens)\n")
         
         if needs_condensing:
             if self.settings_model.summarize_prompts:
-                self.view.append_thinking_text(f"🔄 Condensing oversized context elements...\n\n")
+                self.view.append_logs(f"🔄 Condensing oversized context elements...\n\n")
                 self.view.set_waiting(True)
 
                 # Store context for continuation after condensing
@@ -478,7 +478,7 @@ class MainController:
                 return
             else:
                 # Summarization disabled - inform the user we're skipping condensing
-                self.view.append_thinking_text(f"⚠️ Prompt summarization disabled; skipping condensing of oversized prompts.\n")
+                self.view.append_logs(f"⚠️ Prompt summarization disabled; skipping condensing of oversized prompts.\n")
         
         fixed_costs = supp_tokens + notes_tokens + user_tokens + system_tokens + safety_buffer
         
@@ -501,12 +501,12 @@ class MainController:
         needs_chunking = story_tokens > max_raw_tokens and current_story
         
         if needs_chunking:
-            self.view.append_thinking_text(f"\n{'='*60}\n")
-            self.view.append_thinking_text(f"📊 HIERARCHICAL SUMMARIZATION ACTIVE\n")
-            self.view.append_thinking_text(f"Story tokens: {story_tokens} | Context limit: {context_limit}\n")
-            self.view.append_thinking_text(f"Max raw content: {max_raw_tokens} tokens\n")
-            self.view.append_thinking_text(f"Max rolling summary: {max_rolling_summary_tokens} tokens\n")
-            self.view.append_thinking_text(f"{'='*60}\n\n")
+            self.view.append_logs(f"\n{'='*60}\n")
+            self.view.append_logs(f"📊 HIERARCHICAL SUMMARIZATION ACTIVE\n")
+            self.view.append_logs(f"Story tokens: {story_tokens} | Context limit: {context_limit}\n")
+            self.view.append_logs(f"Max raw content: {max_raw_tokens} tokens\n")
+            self.view.append_logs(f"Max rolling summary: {max_rolling_summary_tokens} tokens\n")
+            self.view.append_logs(f"{'='*60}\n\n")
             
             self.view.set_waiting(True)
             
@@ -525,7 +525,7 @@ class MainController:
                 max_raw_tokens,
                 max_rolling_summary_tokens,
                 self.summary_model,
-                self.view.append_thinking_text,
+                self.view.append_logs,
                 self._on_summarization_complete,
                 self._on_summarization_error,
                 self.view.set_waiting
@@ -559,38 +559,32 @@ class MainController:
             
             # Check if RAG context is too large
             if rag_tokens > max_rag_tokens:
-                if self.view.thinking_panel.isVisible():
-                    self.view.append_thinking_text(f"\n⚠️ RAG context too large ({rag_tokens} > {max_rag_tokens} tokens)\n")
-                    if self.settings_model.summarize_prompts:
-                        self.view.append_thinking_text(f"🔄 Condensing RAG context...\n")
-                    else:
-                        self.view.append_thinking_text(f"⚠️ Prompt summarization disabled; not condensing RAG context.\n")
+                self.view.append_logs(f"\n⚠️ RAG context too large ({rag_tokens} > {max_rag_tokens} tokens)\n")
+                if self.settings_model.summarize_prompts:
+                    self.view.append_logs(f"🔄 Condensing RAG context...\n")
+                else:
+                    self.view.append_logs(f"⚠️ Prompt summarization disabled; not condensing RAG context.\n")
 
                 if self.settings_model.summarize_prompts:
                     rag_context, rag_tokens = self.llm_controller.summarize_rag_context(rag_context, max_rag_tokens)
-
-                    if self.view.thinking_panel.isVisible():
-                        self.view.append_thinking_text(f"  ✓ Reduced to {rag_tokens} tokens\n")
+                    self.view.append_logs(f"  ✓ Reduced to {rag_tokens} tokens\n")
             
             final_query = final_query + "\n\nRELEVANT CONTEXT FROM KNOWLEDGE BASE:\n" + rag_context
-            if self.view.thinking_panel.isVisible():
-                self.view.append_thinking_text(f"\n🔍 Including RAG context ({rag_tokens} tokens)\n")
+            self.view.append_logs(f"\n🔍 Including RAG context ({rag_tokens} tokens)\n")
         
         # Always append supplemental text
         if supp_text:
             final_query = final_query + "\n\n" + supp_text
-            if self.view.thinking_panel.isVisible():
-                self.view.append_thinking_text(f"\n📎 Including {len(supp_text)} chars of supplemental prompts\n")
+            self.view.append_logs(f"\n📎 Including {len(supp_text)} chars of supplemental prompts\n")
         
         # Always append notes text
         if notes:
             final_query = final_query + "\n\nAUTHOR'S NOTES (for context):\n" + notes
-            if self.view.thinking_panel.isVisible():
-                self.view.append_thinking_text(f"📝 Including {len(notes)} chars of author notes\n")
+            self.view.append_logs(f"📝 Including {len(notes)} chars of author notes\n")
         
         # Show system prompt info
-        if system_prompt and self.view.thinking_panel.isVisible():
-            self.view.append_thinking_text(f"🔧 Using system prompt ({len(system_prompt)} chars)\n")
+        if system_prompt:
+            self.view.append_logs(f"🔧 Using system prompt ({len(system_prompt)} chars)\n")
         
         # Start waiting animation
         self.view.set_waiting(True)
@@ -631,7 +625,7 @@ class MainController:
         
         # Retrieve the pending context
         if not hasattr(self, '_pending_send_context'):
-            self.view.append_thinking_text("\n❌ Error: Lost context during summarization\n")
+            self.view.append_logs("\n❌ Error: Lost context during summarization\n")
             self.view.set_waiting(False)
             return
         
@@ -665,34 +659,29 @@ class MainController:
             
             # Check if RAG context is too large
             if rag_tokens > max_rag_tokens:
-                if self.view.thinking_panel.isVisible():
-                    self.view.append_thinking_text(f"\n⚠️ RAG context too large ({rag_tokens} > {max_rag_tokens} tokens)\n")
-                    self.view.append_thinking_text(f"🔄 Condensing RAG context...\n")
+                self.view.append_logs(f"\n⚠️ RAG context too large ({rag_tokens} > {max_rag_tokens} tokens)\n")
+                self.view.append_logs(f"🔄 Condensing RAG context...\n")
                 
                 rag_context, rag_tokens = self.llm_controller.summarize_rag_context(rag_context, max_rag_tokens)
                 
-                if self.view.thinking_panel.isVisible():
-                    self.view.append_thinking_text(f"  ✓ Reduced to {rag_tokens} tokens\n")
+                self.view.append_logs(f"  ✓ Reduced to {rag_tokens} tokens\n")
             
             final_query = final_query + "\n\nRELEVANT CONTEXT FROM KNOWLEDGE BASE:\n" + rag_context
-            if self.view.thinking_panel.isVisible():
-                self.view.append_thinking_text(f"\n🔍 Including RAG context ({rag_tokens} tokens)\n")
+            self.view.append_logs(f"\n🔍 Including RAG context ({rag_tokens} tokens)\n")
         
         # Always append supplemental text
         if supp_text:
             final_query = final_query + "\n\n" + supp_text
-            if self.view.thinking_panel.isVisible():
-                self.view.append_thinking_text(f"\n📎 Including {len(supp_text)} chars of supplemental prompts\n")
+            self.view.append_logs(f"\n📎 Including {len(supp_text)} chars of supplemental prompts\n")
         
         # Always append notes text
         if notes:
             final_query = final_query + "\n\nAUTHOR'S NOTES (for context):\n" + notes
-            if self.view.thinking_panel.isVisible():
-                self.view.append_thinking_text(f"📝 Including {len(notes)} chars of author notes\n")
+            self.view.append_logs(f"📝 Including {len(notes)} chars of author notes\n")
         
         # Show system prompt info
-        if system_prompt and self.view.thinking_panel.isVisible():
-            self.view.append_thinking_text(f"🔧 Using system prompt ({len(system_prompt)} chars)\n")
+        if system_prompt:
+            self.view.append_logs(f"🔧 Using system prompt ({len(system_prompt)} chars)\n")
         
         # Start waiting animation
         self.view.set_waiting(True)
@@ -1121,7 +1110,7 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
                        (story_changed or self.view.prompts_panel.should_regenerate_notes()))
         
         if should_regen:
-            self.view.append_thinking_text("📝 Generating scene notes...\n")
+            self.view.append_logs("📝 Generating scene notes...\n")
             self.view.set_waiting(True)
             
             # Clear notes section before regenerating
@@ -1158,17 +1147,17 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
         
         # Clear thinking panel and provide instructions
         self.view.clear_thinking_text()
-        self.view.append_thinking_text(f"\n{'='*60}\n")
-        self.view.append_thinking_text(f"🤖 AUTO STORY BUILD MODE ACTIVATED\n")
-        self.view.append_thinking_text(f"{'='*60}\n\n")
-        self.view.append_thinking_text(f"Initial Prompt: {initial_prompt[:100]}...\n\n")
-        self.view.append_thinking_text(f"Configuration:\n")
-        self.view.append_thinking_text(f"  • Chunk size: 3 paragraphs\n")
-        self.view.append_thinking_text(f"  • Summarize every: 2-3 chunks\n")
-        self.view.append_thinking_text(f"  • Max chunks: 10 (configurable)\n")
-        self.view.append_thinking_text(f"  • RAG: Enabled (refresh after each chunk)\n\n")
-        self.view.append_thinking_text(f"Press STOP to end generation at any time.\n")
-        self.view.append_thinking_text(f"{'='*60}\n\n")
+        self.view.append_logs(f"\n{'='*60}\n")
+        self.view.append_logs(f"🤖 AUTO STORY BUILD MODE ACTIVATED\n")
+        self.view.append_logs(f"{'='*60}\n\n")
+        self.view.append_logs(f"Initial Prompt: {initial_prompt[:100]}...\n\n")
+        self.view.append_logs(f"Configuration:\n")
+        self.view.append_logs(f"  • Chunk size: 3 paragraphs\n")
+        self.view.append_logs(f"  • Summarize every: 2-3 chunks\n")
+        self.view.append_logs(f"  • Max chunks: 10 (configurable)\n")
+        self.view.append_logs(f"  • RAG: Enabled (refresh after each chunk)\n\n")
+        self.view.append_logs(f"Press STOP to end generation at any time.\n")
+        self.view.append_logs(f"{'='*60}\n\n")
         
         # Sync markdown content with any user edits
         current_story = self.view.get_story_content()
@@ -1203,10 +1192,10 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
         
         # Check if we should stop
         if state['chunk_count'] >= state['max_chunks']:
-            self.view.append_thinking_text(f"\n\n{'='*60}\n")
-            self.view.append_thinking_text(f"✅ AUTO BUILD COMPLETE\n")
-            self.view.append_thinking_text(f"Generated {state['chunk_count']} chunks total.\n")
-            self.view.append_thinking_text(f"{'='*60}\n")
+            self.view.append_logs(f"\n\n{'='*60}\n")
+            self.view.append_logs(f"✅ AUTO BUILD COMPLETE\n")
+            self.view.append_logs(f"Generated {state['chunk_count']} chunks total.\n")
+            self.view.append_logs(f"{'='*60}\n")
             self.view.set_stop_enabled(False)
             # Render markdown
             self._markdown_content = self.view.get_story_content()
@@ -1214,10 +1203,10 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
             return
         
         if self.llm_model.stop_generation:
-            self.view.append_thinking_text(f"\n\n{'='*60}\n")
-            self.view.append_thinking_text(f"⏹️ AUTO BUILD STOPPED BY USER\n")
-            self.view.append_thinking_text(f"Generated {state['chunk_count']} chunks.\n")
-            self.view.append_thinking_text(f"{'='*60}\n")
+            self.view.append_logs(f"\n\n{'='*60}\n")
+            self.view.append_logs(f"⏹️ AUTO BUILD STOPPED BY USER\n")
+            self.view.append_logs(f"Generated {state['chunk_count']} chunks.\n")
+            self.view.append_logs(f"{'='*60}\n")
             self.view.set_stop_enabled(False)
             # Render markdown
             self._markdown_content = self.view.get_story_content()
@@ -1227,9 +1216,9 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
         state['chunk_count'] += 1
         chunk_num = state['chunk_count']
         
-        self.view.append_thinking_text(f"\n{'─'*60}\n")
-        self.view.append_thinking_text(f"📝 GENERATING CHUNK {chunk_num}/{state['max_chunks']}\n")
-        self.view.append_thinking_text(f"{'─'*60}\n\n")
+        self.view.append_logs(f"\n{'─'*60}\n")
+        self.view.append_logs(f"📝 GENERATING CHUNK {chunk_num}/{state['max_chunks']}\n")
+        self.view.append_logs(f"{'─'*60}\n\n")
         
         # Get current story content
         current_story = self.view.get_story_content()
@@ -1250,25 +1239,25 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
         
         # Condense if needed (same logic as _on_send)
         if supp_tokens > max_supp_tokens and state['supp_text'] and self.settings_model.summarize_prompts:
-            self.view.append_thinking_text(f"🔄 Condensing supplemental prompts...\n")
+            self.view.append_logs(f"🔄 Condensing supplemental prompts...\n")
             state['supp_text'], supp_tokens = self.llm_controller.summarize_supplemental(
                 state['supp_text'], max_supp_tokens
             )
-            self.view.append_thinking_text(f"  ✓ Reduced to {supp_tokens} tokens\n")
+            self.view.append_logs(f"  ✓ Reduced to {supp_tokens} tokens\n")
         
         if system_tokens > max_system_tokens and state['system_prompt'] and self.settings_model.summarize_prompts:
-            self.view.append_thinking_text(f"🔄 Condensing system prompt...\n")
+            self.view.append_logs(f"🔄 Condensing system prompt...\n")
             state['system_prompt'], system_tokens = self.llm_controller.summarize_system_prompt(
                 state['system_prompt'], max_system_tokens
             )
-            self.view.append_thinking_text(f"  ✓ Reduced to {system_tokens} tokens\n")
+            self.view.append_logs(f"  ✓ Reduced to {system_tokens} tokens\n")
         
         if notes_tokens > max_notes_tokens and state['notes'] and self.settings_model.summarize_prompts:
-            self.view.append_thinking_text(f"🔄 Condensing notes...\n")
+            self.view.append_logs(f"🔄 Condensing notes...\n")
             state['notes'], notes_tokens = self.llm_controller.summarize_supplemental(
                 state['notes'], max_notes_tokens
             )
-            self.view.append_thinking_text(f"  ✓ Reduced to {notes_tokens} tokens\n")
+            self.view.append_logs(f"  ✓ Reduced to {notes_tokens} tokens\n")
         
         # Query RAG with initial prompt + recent story content
         rag_query = state['initial_prompt']
@@ -1277,7 +1266,7 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
             recent_story = current_story[-500:] if len(current_story) > 500 else current_story
             rag_query = f"{state['initial_prompt']}\n\nRecent story content:\n{recent_story}"
         
-        self.view.append_thinking_text(f"🔍 Querying RAG databases...\n")
+        self.view.append_logs(f"🔍 Querying RAG databases...\n")
         rag_context = self.rag_controller.query_databases(rag_query)
         
         if rag_context:
@@ -1285,16 +1274,16 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
             max_rag_tokens = 600
             
             if rag_tokens > max_rag_tokens and self.settings_model.summarize_prompts:
-                self.view.append_thinking_text(f"  ⚠️ RAG context too large ({rag_tokens} > {max_rag_tokens})\n")
-                self.view.append_thinking_text(f"  🔄 Condensing RAG context...\n")
+                self.view.append_logs(f"  ⚠️ RAG context too large ({rag_tokens} > {max_rag_tokens})\n")
+                self.view.append_logs(f"  🔄 Condensing RAG context...\n")
                 rag_context, rag_tokens = self.llm_controller.summarize_rag_context(
                     rag_context, max_rag_tokens
                 )
             
-            self.view.append_thinking_text(f"  ✓ Retrieved {rag_tokens} tokens from RAG\n")
+            self.view.append_logs(f"  ✓ Retrieved {rag_tokens} tokens from RAG\n")
             state['last_rag_context'] = rag_context
         else:
-            self.view.append_thinking_text(f"  ℹ️ No RAG results\n")
+            self.view.append_logs(f"  ℹ️ No RAG results\n")
             state['last_rag_context'] = None
         
         # Check if we need to summarize story
@@ -1304,8 +1293,8 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
         max_raw_tokens = min(self.rag_model.summary_chunk_size, int(available_for_story * 0.6))
         
         if story_tokens > max_raw_tokens and current_story:
-            self.view.append_thinking_text(f"\n📊 Story getting large ({story_tokens} tokens)\n")
-            self.view.append_thinking_text(f"🔄 Running summarization to compress older content...\n\n")
+            self.view.append_logs(f"\n📊 Story getting large ({story_tokens} tokens)\n")
+            self.view.append_logs(f"🔄 Running summarization to compress older content...\n\n")
             
             # Store context and run summarization, then continue in callback
             self._auto_build_pending_continue = True
@@ -1357,7 +1346,7 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
         final_query = "".join(query_parts)
         
         # Generate chunk with paragraph limit
-        self.view.append_thinking_text(f"✍️ Generating {state['paragraphs_per_chunk']} paragraphs...\n\n")
+        self.view.append_logs(f"✍️ Generating {state['paragraphs_per_chunk']} paragraphs...\n\n")
         
         self.llm_controller.generate_story_chunk(
             final_query,
@@ -1386,7 +1375,7 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
             self.view.render_story_markdown(self._markdown_content)
             return
         
-        self.view.append_thinking_text(f"\n✅ Chunk {state['chunk_count']} complete!\n")
+        self.view.append_logs(f"\n✅ Chunk {state['chunk_count']} complete!\n")
         
         # Update story model with new content
         current_story = self.view.get_story_content()
@@ -1402,18 +1391,18 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
         # Check if user requested stop
         if self.llm_model.stop_generation:
             state = self._auto_build_state
-            self.view.append_thinking_text(f"\n\n{'='*60}\n")
-            self.view.append_thinking_text(f"⏹️ AUTO BUILD STOPPED BY USER (during summarization)\n")
-            self.view.append_thinking_text(f"Generated {state['chunk_count']} chunks.\n")
-            self.view.append_thinking_text(f"{'='*60}\n")
+            self.view.append_logs(f"\n\n{'='*60}\n")
+            self.view.append_logs(f"⏹️ AUTO BUILD STOPPED BY USER (during summarization)\n")
+            self.view.append_logs(f"Generated {state['chunk_count']} chunks.\n")
+            self.view.append_logs(f"{'='*60}\n")
             self.view.set_stop_enabled(False)
             # Render markdown
             self._markdown_content = self.view.get_story_content()
             self.view.render_story_markdown(self._markdown_content)
             return
         
-        self.view.append_thinking_text(f"\n✅ Summarization complete ({tokens} tokens)\n")
-        self.view.append_thinking_text(f"Continuing with chunk generation...\n\n")
+        self.view.append_logs(f"\n✅ Summarization complete ({tokens} tokens)\n")
+        self.view.append_logs(f"Continuing with chunk generation...\n\n")
         
         # Continue with chunk generation
         self._execute_chunk_generation(story_for_llm)

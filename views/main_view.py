@@ -227,6 +227,14 @@ class MainView(QtWidgets.QWidget):
         """Clear thinking panel."""
         self.thinking_panel.clear_thinking_text()
     
+    def append_logs(self, text):
+        """Append text to logs panel."""
+        self.prompts_panel.append_logs(text)
+    
+    def clear_logs(self):
+        """Clear logs panel."""
+        self.prompts_panel.clear_logs()
+    
     def set_waiting(self, waiting):
         """Set waiting state (show/hide progress bar, enable/disable input)."""
         self.control_panel.set_waiting(waiting)

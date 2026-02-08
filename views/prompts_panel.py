@@ -165,11 +165,15 @@ class PromptsPanel(QtWidgets.QWidget):
         # === RAG Tab ===
         rag_tab = self._create_rag_tab()
         
+        # === Logs Tab ===
+        logs_tab = self._create_logs_tab()
+        
         # Add tabs to the tab widget
         self.prompts_tab_widget.addTab(notes_tab, "Notes")
         self.prompts_tab_widget.addTab(supp_tab, "Supplemental")
         self.prompts_tab_widget.addTab(sys_tab, "System")
         self.prompts_tab_widget.addTab(rag_tab, "RAG")
+        self.prompts_tab_widget.addTab(logs_tab, "Logs")
         
         container_layout.addWidget(self.prompts_tab_widget)
         container.setLayout(container_layout)
@@ -313,6 +317,39 @@ class PromptsPanel(QtWidgets.QWidget):
         rag_tab.setLayout(rag_layout)
         
         return rag_tab
+    
+    def _create_logs_tab(self):
+        """Create the logs tab."""
+        logs_tab = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout()
+        layout.setContentsMargins(5, 5, 5, 5)
+        
+        # Logs text area
+        self.logs_text = QtWidgets.QTextEdit()
+        self.logs_text.setReadOnly(True)
+        self.logs_text.setPlaceholderText('Status messages and logs will appear here...')
+        layout.addWidget(self.logs_text)
+        
+        # Clear button
+        clear_layout = QtWidgets.QHBoxLayout()
+        clear_layout.addStretch()
+        clear_logs_button = QtWidgets.QPushButton('Clear Logs')
+        clear_logs_button.clicked.connect(self.clear_logs)
+        clear_layout.addWidget(clear_logs_button)
+        layout.addLayout(clear_layout)
+        
+        logs_tab.setLayout(layout)
+        return logs_tab
+    
+    def append_logs(self, text: str):
+        """Append text to the logs panel."""
+        self.logs_text.moveCursor(QtGui.QTextCursor.End)
+        self.logs_text.insertPlainText(text)
+        self.logs_text.moveCursor(QtGui.QTextCursor.End)
+    
+    def clear_logs(self):
+        """Clear the logs panel."""
+        self.logs_text.clear()
     
     def eventFilter(self, obj, event):
         """Event filter for font resizing with Ctrl+Wheel."""

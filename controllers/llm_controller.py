@@ -618,13 +618,14 @@ class LLMController:
             )
             
             generated_notes = ""
+            in_thinking_block = False
             
             import warnings
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
                 
                 if on_chunk_callback:
-                    # Use streaming
+                    # Use streaming with thinking block filtering
                     for chunk in llm_for_notes.stream([HumanMessage(content=generation_prompt)]):
                         if hasattr(chunk, 'content'):
                             text = chunk.content
@@ -634,8 +635,23 @@ class LLMController:
                             text = str(chunk)
                         
                         if text:
-                            generated_notes += text
-                            on_chunk_callback(text)
+                            # Filter out thinking blocks from notes
+                            if "<think>" in text:
+                                before_think = text.split("<think>")[0]
+                                if before_think:
+                                    generated_notes += before_think
+                                    on_chunk_callback(before_think)
+                                in_thinking_block = True
+                                text = text.split("<think>", 1)[1] if "<think>" in text else ""
+                            
+                            if "</think>" in text and in_thinking_block:
+                                after_think = text.split("</think>", 1)[1] if "</think>" in text else ""
+                                in_thinking_block = False
+                                text = after_think
+                            
+                            if not in_thinking_block and text:
+                                generated_notes += text
+                                on_chunk_callback(text)
                 else:
                     # Non-streaming
                     response = llm_for_notes.invoke([HumanMessage(content=generation_prompt)])
