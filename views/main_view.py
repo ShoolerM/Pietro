@@ -473,7 +473,7 @@ class MainView(QtWidgets.QWidget):
         
         dialog.exec_()
         
-        return result['saved'], result['auto_notes']
+        return result
     
     def show_summarization_prompt_dialog(self, current_prompt):
         """Show summarization prompt settings dialog and return new prompt if saved."""
