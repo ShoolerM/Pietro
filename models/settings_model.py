@@ -55,6 +55,7 @@ class SettingsModel(Observable):
         self._render_markdown = True  # Render story as markdown by default
         self._summary_prompt_template = self.DEFAULT_SUMMARY_PROMPT
         self._notes_prompt_template = self.DEFAULT_NOTES_PROMPT
+        self._planning_prompt_template = "What story would you like to plan?"
 
         # Per-model profile settings
         self._model_profiles = {}
@@ -337,6 +338,17 @@ class SettingsModel(Observable):
         """Set notes prompt template."""
         self._notes_prompt_template = value
         self.notify_observers('notes_prompt_changed', value)
+    
+    @property
+    def planning_prompt_template(self):
+        """Get planning prompt template."""
+        return self._planning_prompt_template
+    
+    @planning_prompt_template.setter
+    def planning_prompt_template(self, value):
+        """Set planning prompt template."""
+        self._planning_prompt_template = value
+        self.notify_observers('planning_prompt_changed', value)
     
     def _load_summary_prompt(self):
         """Load the summary prompt from settings/summary_prompt.txt or use default."""

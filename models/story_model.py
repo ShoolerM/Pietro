@@ -10,6 +10,8 @@ class StoryModel(Observable):
         self._content = ""
         self._history = []
         self._notes = ""
+        self._planning_outline = ""
+        self._planning_active = False
     
     @property
     def content(self):
@@ -32,6 +34,28 @@ class StoryModel(Observable):
         """Set notes content and notify observers."""
         self._notes = value
         self.notify_observers('notes_changed', value)
+    
+    @property
+    def planning_outline(self):
+        """Get current planning outline (markdown checklist)."""
+        return self._planning_outline
+    
+    @planning_outline.setter
+    def planning_outline(self, value):
+        """Set planning outline and notify observers."""
+        self._planning_outline = value
+        self.notify_observers('planning_outline_changed', value)
+    
+    @property
+    def planning_active(self):
+        """Check if planning mode is active."""
+        return self._planning_active
+    
+    @planning_active.setter
+    def planning_active(self, value):
+        """Set planning mode active flag and notify observers."""
+        self._planning_active = value
+        self.notify_observers('planning_active_changed', value)
     
     def append_content(self, text):
         """Append text to story content.

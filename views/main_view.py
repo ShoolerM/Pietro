@@ -48,6 +48,7 @@ class MainView(QtWidgets.QWidget):
     override_selection_requested = QtCore.pyqtSignal(str, int, int)  # selected_text, start_pos, end_pos
     update_selection_with_prompt_requested = QtCore.pyqtSignal(str, int, int, str)  # selected_text, start_pos, end_pos, prompt
     update_accepted = QtCore.pyqtSignal()  # user accepted the update
+    planning_mode_requested = QtCore.pyqtSignal()  # request to open planning mode dialog
     update_rejected = QtCore.pyqtSignal()  # user rejected the update
     
     def __init__(self):
@@ -68,6 +69,9 @@ class MainView(QtWidgets.QWidget):
         # Create menu bar
         menu_bar = QtWidgets.QMenuBar()
         file_menu = menu_bar.addMenu('File')
+        planning_mode_action = file_menu.addAction('Planning Mode...')
+        planning_mode_action.triggered.connect(lambda: self.planning_mode_requested.emit())
+        file_menu.addSeparator()
         load_action = file_menu.addAction('Load...')
         load_action.setShortcut('Ctrl+O')
         load_action.triggered.connect(lambda: self.story_panel.load_story_file())

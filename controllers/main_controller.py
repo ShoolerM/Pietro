@@ -106,6 +106,7 @@ class MainController:
         self.view.update_selection_with_prompt_requested.connect(self._on_update_selection_with_prompt)
         self.view.update_accepted.connect(self._on_update_accepted)
         self.view.update_rejected.connect(self._on_update_rejected)
+        self.view.planning_mode_requested.connect(self._on_planning_mode_requested)
     
     def _connect_observers(self):
         """Connect model observers to update view."""
@@ -198,6 +199,16 @@ class MainController:
             # Continue with auto-build mode
             self._continue_auto_build(
                 ctx['initial_prompt'],
+                ctx['notes'],
+                ctx['supp_text'],
+                ctx['system_prompt']
+            )
+        elif hasattr(self, '_pending_planning_build_context'):
+            ctx = self._pending_planning_build_context
+            delattr(self, '_pending_planning_build_context')
+            # Continue with planning build mode
+            self._start_planning_build(
+                ctx['outline'],
                 ctx['notes'],
                 ctx['supp_text'],
                 ctx['system_prompt']
@@ -547,6 +558,15 @@ class MainController:
             final_query = "".join([p for p in final_query if p is not None])
         else:
             final_query = user_input
+        
+        # Prepend planning outline if active
+        if self.story_model.planning_active and self.story_model.planning_outline:
+            outline_context = f"""STORY OUTLINE (must address all tasks):
+{self.story_model.planning_outline}
+
+"""
+            final_query = outline_context + final_query
+            self.view.append_logs(f"\n📋 Using planning outline as context\n")
         
         # Save to history before appending new content
         self.story_model.save_to_history()
@@ -1423,6 +1443,471 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
             success = self.settings_model.save_summary_prompt(new_prompt)
             if not success:
                 self.view.show_warning("Save Error", "Failed to save summarization prompt")
+    
+    def _on_planning_mode_requested(self):
+        """Handle Planning Mode menu action.
+        
+        Opens a dialog for interactive story outline planning with the LLM.
+        User converses until satisfied with outline, then clicks "Start Writing"
+        to proceed with generation guided by the outline.
+        """
+        from views.planning_mode_dialog import PlanningModeDialog
+        
+        # Create and show the planning dialog
+        dialog = PlanningModeDialog(
+            parent=self.view,
+            initial_prompt=self.settings_model.planning_prompt_template
+        )
+        
+        # State for planning conversation
+        self._planning_conversation_state = {
+            'outline_text': '',
+            'llm_ready': True
+        }
+        
+        # Connect dialog signals
+        dialog.user_input_ready.connect(lambda text: self._on_planning_user_input(text, dialog))
+        dialog.start_writing_clicked.connect(lambda outline: self._on_planning_start_writing(outline))
+        dialog.dialog_cancelled.connect(lambda: print("Planning mode cancelled"))
+        
+        # Show dialog with initial prompt
+        result = dialog.show_with_initial_prompt()
+        
+        if result == QtWidgets.QDialog.Accepted:
+            # Dialog accepted with "Start Writing" - outline was handled in _on_planning_start_writing
+            print("Planning mode completed successfully")
+        else:
+            # Dialog rejected or cancelled
+            print("Planning mode cancelled by user")
+    
+    def _on_planning_user_input(self, user_text, dialog):
+        """Handle user input during planning mode conversation.
+        
+        Args:
+            user_text: The text entered by user
+            dialog: The PlanningModeDialog instance
+        """
+        # Set waiting state
+        dialog.set_waiting.emit(True)
+        
+        # Query RAG databases for relevant context
+        rag_context = self.rag_controller.query_databases(user_text)
+        
+        # Build query for planning - request outline in markdown checklist format
+        planning_prompt = f"""User input for story planning: {user_text}"""
+        
+        # Add RAG context if available
+        if rag_context:
+            planning_prompt += f"\n\nRELEVANT CONTEXT FROM KNOWLEDGE BASE:\n{rag_context}"
+        
+        planning_prompt += """\n\nBased on this input and context, provide the next question to help develop the story outline, 
+OR if the user seems ready, provide a complete story outline in markdown checklist format:
+- [ ] Task 1
+- [ ] Task 2
+- [ ] Task 3
+
+If you're providing an outline, format it ONLY as a checklist with no other text."""
+        
+        def planning_thread():
+            """Run LLM in background thread with proper signal emission."""
+            try:
+                from langchain_core.messages import SystemMessage, HumanMessage
+                
+                system_msg = SystemMessage(content="You are a creative writing assistant helping plan a story outline.")
+                human_msg = HumanMessage(content=planning_prompt)
+                
+                full_response = ""
+                # Stream response tokens
+                for chunk in self.llm_controller.llm.stream([system_msg, human_msg]):
+                    if hasattr(chunk, 'content'):
+                        text = chunk.content
+                        full_response += text
+                        # Emit token signal (thread-safe via Qt signals)
+                        dialog.llm_token_received.emit(text)
+                
+                # Emit completion signal with full response
+                dialog.llm_response_complete.emit(full_response)
+                dialog.set_waiting.emit(False)
+                
+            except Exception as e:
+                print(f"Error in planning LLM: {e}")
+                import traceback
+                traceback.print_exc()
+                dialog.set_waiting.emit(False)
+        
+        # Start planning thread
+        thread = threading.Thread(target=planning_thread, daemon=True)
+        thread.start()
+    
+    def _on_planning_start_writing(self, outline):
+        """Handle Start Writing button in planning mode.
+        
+        Args:
+            outline: The markdown checklist outline from the dialog
+        """
+        # Store outline in story model
+        self.story_model.planning_outline = outline
+        self.story_model.planning_active = True
+        
+        print("✓ Planning mode completed")
+        print(f"Outline stored:\n{outline}")
+        print("Story will be generated following the outline structure")
+        
+        # Gather current context from panels
+        notes = self.view.prompts_panel.get_notes_text().strip()
+        supp_text = self.view.prompts_panel.gather_supplemental_text()
+        system_prompt = self.view.prompts_panel.get_system_prompt_text()
+        
+        # Start outline-driven story generation
+        self._start_planning_build(outline, notes, supp_text, system_prompt)
+    
+    def _start_planning_build(self, outline, notes, supp_text, system_prompt):
+        """Start outline-driven story generation mode.
+        
+        Similar to auto-build, but generates content for each outline task sequentially.
+        
+        Args:
+            outline: Markdown checklist outline
+            notes: Author notes
+            supp_text: Supplemental prompts
+            system_prompt: System prompt
+        """
+        import re
+        import hashlib
+        
+        # Parse outline into tasks
+        task_pattern = r'- \[[x ]\]\s*(.+?)(?=\n- \[|$)'
+        matches = re.findall(task_pattern, outline, re.DOTALL | re.IGNORECASE)
+        tasks = [m.strip() for m in matches if m.strip()]
+        
+        if not tasks:
+            self.view.show_warning("Invalid Outline", "No tasks found in outline. Please ensure outline uses markdown checklist format:\n- [ ] Task 1\n- [ ] Task 2")
+            return
+        
+        # Check if notes should be regenerated (same logic as auto-build)
+        story_context = self.view.get_story_content()
+        current_story_hash = hashlib.md5(story_context.encode()).hexdigest()
+        
+        # Regenerate notes if story has content and auto_notes is enabled
+        story_changed = (self._last_story_content_hash is not None and 
+                        current_story_hash != self._last_story_content_hash)
+        
+        should_regen = (self.settings_model.auto_notes and 
+                       story_context.strip() and
+                       (story_changed or self.view.prompts_panel.should_regenerate_notes()))
+        
+        if should_regen:
+            self.view.append_logs("📝 Generating scene notes...\n")
+            self.view.set_waiting(True)
+            
+            # Clear notes section before regenerating
+            self.view.prompts_panel.clear_notes()
+            
+            # Store context to continue planning build after notes are ready
+            self._pending_planning_build_context = {
+                'outline': outline,
+                'notes': notes,
+                'supp_text': supp_text,
+                'system_prompt': system_prompt
+            }
+            
+            # Generate notes in background thread
+            self._generate_notes_background(story_context)
+            
+            # Store current story hash
+            self._last_story_content_hash = current_story_hash
+            
+            # Return here - will continue in _on_notes_generated callback
+            return
+        
+        # Store current story hash
+        self._last_story_content_hash = current_story_hash
+        
+        # Reset stop flag and enable stop button
+        self.llm_model.reset_stop_flag()
+        self.view.set_stop_enabled(True)
+        
+        # Clear thinking panel and provide instructions
+        self.view.clear_thinking_text()
+        self.view.append_logs(f"\n{'='*60}\n")
+        self.view.append_logs(f"📋 PLANNING MODE: OUTLINE-DRIVEN GENERATION\n")
+        self.view.append_logs(f"{'='*60}\n\n")
+        self.view.append_logs(f"Outline contains {len(tasks)} plot points:\n")
+        for i, task in enumerate(tasks, 1):
+            task_preview = task[:80] + "..." if len(task) > 80 else task
+            self.view.append_logs(f"  {i}. {task_preview}\n")
+        self.view.append_logs(f"\nConfiguration:\n")
+        self.view.append_logs(f"  • Chunk size: 3 paragraphs per plot point\n")
+        self.view.append_logs(f"  • RAG: Enabled (refresh after each chunk)\n")
+        self.view.append_logs(f"  • Summarize: After every 3 chunks\n\n")
+        self.view.append_logs(f"Press STOP to end generation at any time.\n")
+        self.view.append_logs(f"{'='*60}\n\n")
+        
+        # Sync markdown content with any user edits
+        current_story = self.view.get_story_content()
+        self._markdown_content = current_story
+        self.story_model.content = current_story
+        
+        # Switch to plain text mode for streaming
+        self.view.set_story_content(current_story)
+        
+        # Save to history before starting
+        self.story_model.save_to_history()
+        
+        # Initialize planning build state
+        self._planning_build_state = {
+            'outline': outline,
+            'tasks': tasks,
+            'current_task_index': 0,
+            'notes': notes,
+            'supp_text': supp_text,
+            'system_prompt': system_prompt,
+            'chunk_count': 0,
+            'task_chunk_count': 0,
+            'max_chunks_per_task': 2,
+            'paragraphs_per_chunk': 3,
+            'chunks_before_summary': 3,
+            'last_rag_context': None
+        }
+        
+        # Start first task generation
+        self._generate_next_planning_chunk()
+    
+    def _generate_next_planning_chunk(self):
+        """Generate the next chunk for the current outline task."""
+        state = self._planning_build_state
+        
+        # Check if all tasks are complete
+        if state['current_task_index'] >= len(state['tasks']):
+            self.view.append_logs(f"\n\n{'='*60}\n")
+            self.view.append_logs(f"✅ PLANNING BUILD COMPLETE\n")
+            self.view.append_logs(f"All {len(state['tasks'])} plot points addressed.\n")
+            self.view.append_logs(f"Total chunks generated: {state['chunk_count']}\n")
+            self.view.append_logs(f"{'='*60}\n")
+            self.view.set_waiting(False)
+            self.view.set_stop_enabled(False)
+            self.story_model.planning_active = False
+            # Render markdown
+            self._markdown_content = self.view.get_story_content()
+            self.view.render_story_markdown(self._markdown_content)
+            return
+        
+        # Check if user requested stop
+        if self.llm_model.stop_generation:
+            self.view.append_logs(f"\n\n{'='*60}\n")
+            self.view.append_logs(f"⏹️ PLANNING BUILD STOPPED BY USER\n")
+            self.view.append_logs(f"Completed {state['current_task_index']}/{len(state['tasks'])} plot points.\n")
+            self.view.append_logs(f"Generated {state['chunk_count']} chunks.\n")
+            self.view.append_logs(f"{'='*60}\n")
+            self.view.set_waiting(False)
+            self.view.set_stop_enabled(False)
+            # Render markdown
+            self._markdown_content = self.view.get_story_content()
+            self.view.render_story_markdown(self._markdown_content)
+            return
+        
+        current_task = state['tasks'][state['current_task_index']]
+        state['chunk_count'] += 1
+        state['task_chunk_count'] += 1
+        
+        self.view.append_logs(f"\n{'─'*60}\n")
+        self.view.append_logs(
+            f"📝 PLOT POINT {state['current_task_index'] + 1}/{len(state['tasks'])} "
+            f"(Chunk {state['task_chunk_count']}/{state['max_chunks_per_task']})\n"
+        )
+        task_preview = current_task[:80] + "..." if len(current_task) > 80 else current_task
+        self.view.append_logs(f"Task: {task_preview}\n")
+        self.view.append_logs(f"{'─'*60}\n\n")
+        
+        # Get current story content
+        current_story = self.view.get_story_content()
+        
+        # Check if we need summarization (every N chunks)
+        if (state['chunk_count'] > 1 and 
+            state['chunk_count'] % state['chunks_before_summary'] == 0 and
+            self.settings_model.summarize_prompts):
+            
+            story_tokens = self.story_model.estimate_token_count(current_story)
+            context_limit = self.settings_model.context_limit
+            
+            # Calculate context budgets
+            supp_tokens = self.story_model.estimate_token_count(state['supp_text'])
+            notes_tokens = self.story_model.estimate_token_count(state['notes'])
+            system_tokens = self.story_model.estimate_token_count(state['system_prompt'])
+            safety_buffer = 500
+            
+            fixed_costs = supp_tokens + notes_tokens + system_tokens + safety_buffer
+            available_for_story = context_limit - fixed_costs
+            max_raw_tokens = min(self.rag_model.summary_chunk_size, int(available_for_story * 0.6))
+            
+            if story_tokens > max_raw_tokens:
+                self.view.append_logs(f"\n📊 Story getting large ({story_tokens} tokens)\n")
+                self.view.append_logs(f"🔄 Running summarization to compress older content...\n\n")
+                
+                # Store flag for continuation
+                self._planning_build_pending_continue = True
+                
+                max_rolling_summary_tokens = min(1000, int(available_for_story * 0.4))
+                
+                # Summarize in background using llm_controller method
+                self.llm_controller.process_story_with_summarization(
+                    current_story,
+                    max_raw_tokens,
+                    max_rolling_summary_tokens,
+                    self.summary_model,
+                    self.view.append_logs,
+                    self._on_planning_build_summarization_complete,
+                    self._on_planning_build_error,
+                    self.view.set_waiting
+                )
+                return
+        
+        # Continue with chunk generation
+        self._execute_planning_chunk_generation(current_story)
+    
+    def _execute_planning_chunk_generation(self, story_for_llm):
+        """Execute chunk generation for current planning task."""
+        state = self._planning_build_state
+        current_task = state['tasks'][state['current_task_index']]
+        
+        # Query RAG for task-specific context
+        self.view.append_logs(f"🔍 Querying knowledge bases for task context...\n")
+        rag_context = self.rag_controller.query_databases(current_task)
+        state['last_rag_context'] = rag_context
+        
+        if rag_context:
+            rag_tokens = self.story_model.estimate_token_count(rag_context)
+            self.view.append_logs(f"  ✓ Retrieved {rag_tokens} tokens of context\n")
+        else:
+            self.view.append_logs(f"  • No additional context found\n")
+        
+        # Build query
+        query_parts = []
+        
+        if story_for_llm:
+            query_parts.append(f"Story so far:\n```\n{story_for_llm}\n```\n\n")
+        
+        # Add current task focus
+        query_parts.append(f"CURRENT PLOT POINT TO ADDRESS:\n{current_task}\n\n")
+        
+        # Add remaining tasks for context
+        remaining_tasks = state['tasks'][state['current_task_index'] + 1:]
+        if remaining_tasks:
+            query_parts.append(f"UPCOMING PLOT POINTS (for reference):\n")
+            for i, task in enumerate(remaining_tasks[:3], 1):  # Show next 3
+                query_parts.append(f"{i}. {task}\n")
+            query_parts.append("\n")
+        
+        if rag_context:
+            query_parts.append(f"RELEVANT CONTEXT FROM KNOWLEDGE BASE:\n{rag_context}\n\n")
+        
+        if state['notes']:
+            query_parts.append(f"AUTHOR'S NOTES:\n{state['notes']}\n\n")
+        
+        if state['supp_text']:
+            query_parts.append(f"ADDITIONAL INSTRUCTIONS:\n{state['supp_text']}\n\n")
+        
+        query_parts.append(
+            f"Continue the story addressing the current plot point. "
+            f"Write EXACTLY {state['paragraphs_per_chunk']} paragraphs. "
+            f"Focus on developing the current plot point while maintaining narrative flow."
+        )
+        
+        final_query = "".join(query_parts)
+        
+        # Generate chunk
+        self.view.append_logs(f"✍️ Generating {state['paragraphs_per_chunk']} paragraphs...\n\n")
+        self.view.set_waiting(True)
+        
+        self.llm_controller.generate_story_chunk(
+            final_query,
+            state['system_prompt'],
+            state['paragraphs_per_chunk'],
+            self.view.append_story_content,
+            self.view.append_thinking_text,
+            lambda: self._on_planning_chunk_complete(),
+            self.view.set_waiting,
+            self.view.set_stop_enabled
+        )
+    
+    def _on_planning_chunk_complete(self):
+        """Called when a planning chunk generation completes."""
+        state = self._planning_build_state
+        self.view.set_waiting(False)
+        
+        # Check if user requested stop
+        if self.llm_model.stop_generation:
+            self.view.append_thinking_text(f"\n\n{'='*60}\n")
+            self.view.append_thinking_text(f"⏹️ PLANNING BUILD STOPPED BY USER\n")
+            self.view.append_thinking_text(f"Completed {state['current_task_index']}/{len(state['tasks'])} plot points.\n")
+            self.view.append_thinking_text(f"{'='*60}\n")
+            self.view.set_stop_enabled(False)
+            # Render markdown
+            self._markdown_content = self.view.get_story_content()
+            self.view.render_story_markdown(self._markdown_content)
+            return
+        
+        self.view.append_logs(f"\n✅ Chunk {state['chunk_count']} complete!\n")
+        
+        # Update story model with new content
+        current_story = self.view.get_story_content()
+        self._markdown_content = current_story
+        self.story_model.content = current_story
+        
+        # Check if current task is complete using semantic similarity
+        self.view.append_logs(f"🔍 Checking task completion...\n")
+        current_task = state['tasks'][state['current_task_index']]
+        
+        # Simple heuristic: assume task complete after generating content for it
+        # In the future, could use RAG controller's semantic completion check
+        completion_status = self.rag_controller.get_outline_completion_status(
+            f"- [ ] {current_task}",
+            current_story,
+            similarity_threshold=0.6  # Slightly lower threshold for single-task matching
+        )
+        
+        task_addressed = completion_status['completion_ratio'] >= 0.5
+        if task_addressed or state['task_chunk_count'] >= state['max_chunks_per_task']:
+            if not task_addressed:
+                self.view.append_logs(
+                    f"  • Max chunks reached for this plot point; moving on...\n"
+                )
+            else:
+                self.view.append_logs(f"  ✓ Plot point addressed! Moving to next...\n")
+            state['current_task_index'] += 1
+            state['task_chunk_count'] = 0
+        else:
+            self.view.append_logs(f"  • Continuing with current plot point...\n")
+        
+        # Generate next chunk after a brief moment
+        from PyQt5 import QtCore
+        QtCore.QTimer.singleShot(100, self._generate_next_planning_chunk)
+    
+    def _on_planning_build_summarization_complete(self, story_for_llm, tokens):
+        """Called when summarization completes during planning build."""
+        if not hasattr(self, '_planning_build_pending_continue') or not self._planning_build_pending_continue:
+            return
+        
+        self._planning_build_pending_continue = False
+        
+        # Check if rendering mode (indicates stop was requested)
+        if self.view.story_panel.isReadOnly():
+            self.view.append_logs(f"\n✅ Summarization complete - generation already stopped\n")
+            self._markdown_content = self.view.get_story_content()
+            self.view.render_story_markdown(self._markdown_content)
+            return
+        
+        self.view.append_logs(f"\n✅ Summarization complete ({tokens} tokens)\n")
+        self.view.append_logs(f"Continuing with next chunk...\n\n")
+        
+        # Continue with chunk generation
+        self._execute_planning_chunk_generation(story_for_llm)
+    
+    def _on_planning_build_error(self, error_msg):
+        """Handle errors during planning build mode."""
+        self.view.append_thinking_text(f"\n❌ Error during planning build: {error_msg}\n")
+        self.view.append_thinking_text(f"Planning build stopped.\n")
+        self.view.set_stop_enabled(False)
     
     def _on_notes_prompt_requested(self):
         """Handle notes prompt settings menu action."""

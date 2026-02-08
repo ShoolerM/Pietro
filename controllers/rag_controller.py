@@ -1,6 +1,7 @@
 """Controller for RAG operations using FAISS."""
 import os
 import pickle
+import re
 from pathlib import Path
 from PyQt5 import QtWidgets, QtCore
 from views.progress_dialog import ProgressDialog
@@ -600,3 +601,122 @@ class RAGController:
             import traceback
             traceback.print_exc()
             return ""
+    
+    def get_outline_completion_status(self, outline_text, story_content, similarity_threshold=0.75):
+        """Determine which outline tasks have been addressed in the story.
+        
+        Uses semantic similarity (embeddings) to match outline tasks against story content.
+        Each task in the outline (markdown checklist format) is compared to the story
+        to see if semantically similar content exists.
+        
+        Args:
+            outline_text: Markdown checklist outline (e.g., "- [ ] Task 1\n- [ ] Task 2")
+            story_content: The story text to check for task completion
+            similarity_threshold: Minimum cosine similarity (0.0-1.0) to consider task addressed (default 0.75)
+        
+        Returns:
+            dict: {
+                'all_completed': bool - True if all tasks are addressed,
+                'completed_tasks': list[str] - Tasks found in story,
+                'pending_tasks': list[str] - Tasks not yet in story,
+                'completion_ratio': float - Fraction of tasks completed (0.0-1.0),
+                'task_similarities': dict[str, float] - Each task's best match similarity score
+            }
+        """
+        try:
+            self._init_components()
+            
+            # Extract tasks from markdown checklist
+            # Format: - [ ] Task text or - [x] Task text
+            import re
+            task_pattern = r'- \[[x ]\]\s*(.+?)(?=\n- \[|$)'
+            matches = re.findall(task_pattern, outline_text, re.DOTALL | re.IGNORECASE)
+            tasks = [m.strip() for m in matches if m.strip()]
+            
+            if not tasks:
+                return {
+                    'all_completed': False,
+                    'completed_tasks': [],
+                    'pending_tasks': [],
+                    'completion_ratio': 0.0,
+                    'task_similarities': {}
+                }
+            
+            if not story_content.strip():
+                return {
+                    'all_completed': False,
+                    'completed_tasks': [],
+                    'pending_tasks': tasks,
+                    'completion_ratio': 0.0,
+                    'task_similarities': {task: 0.0 for task in tasks}
+                }
+            
+            # Get embeddings for tasks
+            task_embeddings = self._embeddings.embed_documents(tasks)
+            
+            # Split story into chunks for comparison
+            chunks = story_content.split('\n\n')
+            chunk_embeddings = self._embeddings.embed_documents(chunks)
+            
+            # Compute similarity between each task and all story chunks
+            from sklearn.metrics.pairwise import cosine_similarity
+            import numpy as np
+            
+            completed_tasks = []
+            task_similarities = {}
+            
+            for task, task_emb in zip(tasks, task_embeddings):
+                # Find best match with any chunk
+                best_similarity = 0.0
+                
+                if chunk_embeddings:
+                    similarities = cosine_similarity([task_emb], chunk_embeddings)[0]
+                    best_similarity = float(np.max(similarities))
+                
+                task_similarities[task] = best_similarity
+                
+                # Task is complete if similarity exceeds threshold
+                if best_similarity >= similarity_threshold:
+                    completed_tasks.append(task)
+            
+            all_completed = len(completed_tasks) == len(tasks)
+            pending_tasks = [t for t in tasks if t not in completed_tasks]
+            
+            return {
+                'all_completed': all_completed,
+                'completed_tasks': completed_tasks,
+                'pending_tasks': pending_tasks,
+                'completion_ratio': len(completed_tasks) / len(tasks) if tasks else 0.0,
+                'task_similarities': task_similarities
+            }
+            
+        except ImportError:
+            print("Warning: scikit-learn not available for semantic similarity. Falling back to basic completion.")
+            # Fallback: simple substring matching
+            completed_tasks = []
+            task_pattern = r'- \[[x ]\]\s*(.+?)(?=\n- \[|$)'
+            matches = re.findall(task_pattern, outline_text, re.DOTALL | re.IGNORECASE)
+            tasks = [m.strip() for m in matches if m.strip()]
+            
+            for task in tasks:
+                if task.lower() in story_content.lower():
+                    completed_tasks.append(task)
+            
+            return {
+                'all_completed': len(completed_tasks) == len(tasks),
+                'completed_tasks': completed_tasks,
+                'pending_tasks': [t for t in tasks if t not in completed_tasks],
+                'completion_ratio': len(completed_tasks) / len(tasks) if tasks else 0.0,
+                'task_similarities': {task: 1.0 if task.lower() in story_content.lower() else 0.0 for task in tasks}
+            }
+        except Exception as e:
+            print(f"Error checking outline completion: {e}")
+            import traceback
+            traceback.print_exc()
+            return {
+                'all_completed': False,
+                'completed_tasks': [],
+                'pending_tasks': [],
+                'completion_ratio': 0.0,
+                'task_similarities': {}
+            }
