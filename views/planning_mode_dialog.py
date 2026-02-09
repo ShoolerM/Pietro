@@ -1,15 +1,16 @@
 """Planning Mode Dialog for interactive story outline creation."""
+
 from PyQt5 import QtWidgets, QtCore, QtGui
 
 
 class PlanningInputField(QtWidgets.QTextEdit):
     """Custom text input field with Enter to send, Shift+Enter for newline."""
-    
+
     send_requested = QtCore.pyqtSignal(str)  # Emitted when user presses Enter
-    
+
     def keyPressEvent(self, event):
         """Handle key press events.
-        
+
         Enter: Send message
         Shift+Enter: Add newline
         """
@@ -31,304 +32,329 @@ class PlanningInputField(QtWidgets.QTextEdit):
 
 class PlanningModeDialog(QtWidgets.QDialog):
     """Dialog for interactive planning mode with LLM conversation.
-    
+
     Users converse with LLM to build a story outline as a markdown checklist,
     then click 'Start Writing' to proceed with story generation guided by outline.
     """
-    
+
     # Signals
     user_input_ready = QtCore.pyqtSignal(str)  # User submitted input
-    start_writing_clicked = QtCore.pyqtSignal(str)  # User clicked Start Writing, emit final outline
+    start_writing_clicked = QtCore.pyqtSignal(
+        str
+    )  # User clicked Start Writing, emit final outline
     dialog_cancelled = QtCore.pyqtSignal()  # User clicked Cancel
-    llm_token_received = QtCore.pyqtSignal(str)  # Streaming token from LLM (thread-safe)
+    llm_token_received = QtCore.pyqtSignal(
+        str
+    )  # Streaming token from LLM (thread-safe)
     llm_response_complete = QtCore.pyqtSignal(str)  # Full LLM response received
     set_waiting = QtCore.pyqtSignal(bool)  # Control waiting state
-    
-    def __init__(self, parent=None, initial_prompt="What story would you like to plan?"):
+
+    def __init__(
+        self, parent=None, initial_prompt="What story would you like to plan?"
+    ):
         """Initialize the Planning Mode Dialog.
-        
+
         Args:
             parent: Parent widget
             initial_prompt: The initial prompt to show the user (from settings)
         """
         super().__init__(parent)
-        self.setWindowTitle('Story Planning Mode')
+        self.setWindowTitle("Story Planning Mode")
         self.resize(800, 600)
         self.setModal(True)
-        
+
         self._initial_prompt = initial_prompt
-        self._outline_items = []  # Track outline tasks as they're generated
         self._current_llm_response = ""  # Accumulate full response
-        self._current_llm_response_chunk = ""  # Current message being displayed
-        
+        self._conversation_markdown = ""  # Full conversation as markdown
         self._init_ui()
         self._connect_signals()
-    
+
     def _init_ui(self):
         """Initialize the user interface."""
         layout = QtWidgets.QVBoxLayout()
-        
+
         # Title
-        title_label = QtWidgets.QLabel('Story Planning Assistant')
+        title_label = QtWidgets.QLabel("Story Planning Assistant")
         title_font = title_label.font()
         title_font.setPointSize(14)
         title_font.setBold(True)
         title_label.setFont(title_font)
         layout.addWidget(title_label)
-        
+
         info_label = QtWidgets.QLabel(
-            'Have a conversation with the LLM to develop your story outline.\n'
+            "Have a conversation with the LLM to develop your story outline.\n"
             'When you\'re satisfied with the outline, click "Start Writing" to begin generation.\n'
-            'Tip: Press Enter to send, Shift+Enter to add a newline.'
+            "Tip: Press Enter to send, Shift+Enter to add a newline."
         )
         info_label.setWordWrap(True)
-        info_label.setStyleSheet('color: #666666; font-style: italic;')
+        info_label.setStyleSheet("color: #666666; font-style: italic;")
         layout.addWidget(info_label)
-        
-        # Main content area with two columns
-        content_layout = QtWidgets.QHBoxLayout()
-        
-        # Left column: Conversation
-        left_layout = QtWidgets.QVBoxLayout()
-        left_label = QtWidgets.QLabel('Conversation:')
-        left_layout.addWidget(left_label)
-        
-        # Conversation display (read-only)
-        self.conversation_display = QtWidgets.QTextEdit()
-        self.conversation_display.setReadOnly(True)
+
+        # Main conversation area (renders markdown)
+        conversation_label = QtWidgets.QLabel("Planning Conversation:")
+        layout.addWidget(conversation_label)
+
+        # Use QTextBrowser for markdown rendering
+        self.conversation_display = QtWidgets.QTextBrowser()
+        self.conversation_display.setOpenExternalLinks(False)
         self.conversation_display.setStyleSheet(
-            'QTextEdit { background-color: #f5f5f5; border: 1px solid #cccccc; }'
+            "QTextBrowser { background-color: #f5f5f5; border: 1px solid #cccccc; color: #000000; }"
         )
-        left_layout.addWidget(self.conversation_display)
-        
+        layout.addWidget(self.conversation_display)
+
         # User input field
-        input_label = QtWidgets.QLabel('Your response:')
-        left_layout.addWidget(input_label)
-        
+        input_label = QtWidgets.QLabel("Your response:")
+        layout.addWidget(input_label)
+
         self.user_input_field = PlanningInputField()
         self.user_input_field.setMaximumHeight(80)
-        self.user_input_field.setPlaceholderText('Type your response or ideas for the outline...')
-        left_layout.addWidget(self.user_input_field)
-        
+        self.user_input_field.setPlaceholderText(
+            "Type your response or ideas for the outline..."
+        )
+        layout.addWidget(self.user_input_field)
+
         # Send button (can still click if preferred)
-        send_button = QtWidgets.QPushButton('Send (or press Enter)')
+        send_button = QtWidgets.QPushButton("Send (or press Enter)")
         send_button.clicked.connect(self._on_send_input)
-        left_layout.addWidget(send_button)
-        
-        content_layout.addLayout(left_layout, 2)
-        
-        # Right column: Outline display
-        right_layout = QtWidgets.QVBoxLayout()
-        right_label = QtWidgets.QLabel('Story Outline:')
-        right_layout.addWidget(right_label)
-        
-        self.outline_display = QtWidgets.QTextEdit()
-        self.outline_display.setReadOnly(False)
-        self.outline_display.setStyleSheet(
-            'QTextEdit { background-color: #fffaf0; border: 1px solid #cccccc; color: #000000; }'
-        )
-        self.outline_display.setPlaceholderText(
-            'Outline will appear here as the conversation develops...'
-        )
-        right_layout.addWidget(self.outline_display)
-        
-        content_layout.addLayout(right_layout, 1)
-        
-        layout.addLayout(content_layout, 1)
-        
+        layout.addWidget(send_button)
+
         # Bottom buttons
         button_layout = QtWidgets.QHBoxLayout()
-        
-        self.start_writing_button = QtWidgets.QPushButton('Start Writing')
+
+        self.start_writing_button = QtWidgets.QPushButton("Start Writing")
         self.start_writing_button.setStyleSheet(
-            'QPushButton { background-color: #4CAF50; color: white; '
-            'padding: 6px; font-weight: bold; }'
+            "QPushButton { background-color: #4CAF50; color: white; "
+            "padding: 6px; font-weight: bold; }"
         )
         self.start_writing_button.clicked.connect(self._on_start_writing)
         button_layout.addWidget(self.start_writing_button)
-        
-        cancel_button = QtWidgets.QPushButton('Cancel')
+
+        cancel_button = QtWidgets.QPushButton("Cancel")
         cancel_button.clicked.connect(self._on_cancel)
         button_layout.addWidget(cancel_button)
-        
+
         layout.addLayout(button_layout)
-        
+
         self.setLayout(layout)
-    
+
     def _connect_signals(self):
         """Connect internal signals."""
         # Connect custom input field send signal to handler
         self.user_input_field.send_requested.connect(self._on_send_input)
-        
+
         # Connect streaming signals for thread-safe updates
         self.llm_token_received.connect(self._on_llm_token, QtCore.Qt.QueuedConnection)
-        self.llm_response_complete.connect(self._on_llm_response_complete, QtCore.Qt.QueuedConnection)
+        self.llm_response_complete.connect(
+            self._on_llm_response_complete, QtCore.Qt.QueuedConnection
+        )
         self.set_waiting.connect(self._set_waiting_state, QtCore.Qt.QueuedConnection)
 
-        # Enable Start Writing when outline content changes (manual edits allowed)
-        self.outline_display.textChanged.connect(self._update_start_writing_state)
-        
-        # Enable starting to write only when there's outline content
-        self.start_writing_button.setEnabled(False)
-    
     def _on_send_input(self):
         """Handle user input submission."""
         user_text = self.user_input_field.toPlainText().strip()
         if not user_text:
             return
-        
-        # Append user message to conversation
-        self._append_conversation(f"You: {user_text}", is_user=True)
-        
+
+        # Append user message to conversation as markdown
+        self._conversation_markdown += f"\n\n**You:** {user_text}\n"
+        self._render_conversation()
+
         # Clear input field
         self.user_input_field.clear()
 
-        # Reset per-response accumulators
+        # Reset per-response accumulator and add assistant prefix
         self._current_llm_response = ""
-        self._current_llm_response_chunk = ""
-        
+        self._conversation_markdown += "\n\n**Assistant:** "
+        self._render_conversation()
+
         # Emit signal for controller to handle LLM response
         self.user_input_ready.emit(user_text)
-    
+
     def _on_start_writing(self):
         """Handle Start Writing button click."""
-        outline = self.outline_display.toPlainText().strip()
+        # Extract outline from conversation (look for markdown checklist)
+        outline = self._extract_outline_from_conversation()
         if not outline:
             QtWidgets.QMessageBox.warning(
                 self,
-                'No Outline',
-                'Please develop an outline with the LLM before starting to write.'
+                "No Outline Found",
+                "Please develop an outline with the LLM before starting to write.\n\n"
+                "The LLM can provide an outline in various formats:\n"
+                "• Markdown checklist (- [ ] Plot point)\n"
+                "• Bullet points (- Plot point)\n"
+                "• Numbered list (1. Plot point)\n"
+                "• Acts/Chapters structure",
             )
             return
-        
+
         self.start_writing_clicked.emit(outline)
         self.accept()
-    
+
     def _on_cancel(self):
         """Handle Cancel button click."""
         reply = QtWidgets.QMessageBox.question(
             self,
-            'Cancel Planning',
-            'Are you sure you want to cancel planning mode?',
+            "Cancel Planning",
+            "Are you sure you want to cancel planning mode?",
             QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
-            QtWidgets.QMessageBox.No
+            QtWidgets.QMessageBox.No,
         )
         if reply == QtWidgets.QMessageBox.Yes:
             self.dialog_cancelled.emit()
             self.reject()
-    
+
     def append_llm_response(self, text):
         """Accumulate LLM response token (called from signal, not thread).
-        
+
         Args:
             text: The text token from LLM to append
         """
         self._current_llm_response += text
-        self._current_llm_response_chunk += text
-    
+
     def _on_llm_token(self, token):
         """Handle individual token from LLM streaming (thread-safe via signal).
-        
+
         Args:
             token: Single token from LLM
         """
         self._current_llm_response += token
-        self._current_llm_response_chunk += token
-    
+        # Stream the token to the display immediately
+        self._conversation_markdown += token
+        self._render_conversation()
+
     def _on_llm_response_complete(self, full_response):
         """Handle completion of LLM response (thread-safe via signal).
-        
+
         Args:
             full_response: The complete response from LLM
         """
-        # Check if response is an outline (starts with dash and checkbox)
-        response_text = full_response if full_response is not None else self._current_llm_response
-        clean_response = response_text.strip()
-        if clean_response.startswith('- ['):
-            # This is an outline - update outline display (don't show in conversation)
-            self.set_outline_from_llm(clean_response)
-            # Notify user that outline was generated
-            self._append_conversation("Assistant: Outline generated! Review it on the right and click 'Start Writing' when ready.", is_user=False)
-        else:
-            # This is a regular response - display in conversation
-            display_text = self._current_llm_response_chunk.strip() or clean_response
-            self._append_conversation(f"Assistant: {display_text}", is_user=False)
-        
-        # Reset chunk accumulator for next response
-        self._current_llm_response_chunk = ""
+        # Add newline at end of response
+        self._conversation_markdown += "\n"
+        self._render_conversation()
+
+        # Reset accumulator for next response
         self._current_llm_response = ""
-    
+
     def _set_waiting_state(self, waiting):
         """Set the waiting state (thread-safe via signal).
-        
+
         Args:
             waiting: True if waiting for LLM, False otherwise
         """
         self.user_input_field.setEnabled(not waiting)
-    
-    def _append_conversation(self, text, is_user=False):
-        """Append text to conversation display with styling.
-        
-        Args:
-            text: Text to append
-            is_user: True if this is user input, False if LLM response
-        """
-        cursor = self.conversation_display.textCursor()
-        cursor.movePosition(QtGui.QTextCursor.End)
-        
-        char_format = QtGui.QTextCharFormat()
-        if is_user:
-            char_format.setForeground(QtGui.QColor('#1a73e8'))  # Blue for user
-            char_format.setFontWeight(QtGui.QFont.Bold)
-        else:
-            char_format.setForeground(QtGui.QColor('#202124'))  # Dark gray for assistant
-        
-        cursor.setCharFormat(char_format)
-        cursor.insertText(text + '\n\n')
-        
-        # Auto-scroll to bottom
-        self.conversation_display.setTextCursor(cursor)
-        self.conversation_display.ensureCursorVisible()
-    
-    def set_outline_from_llm(self, outline_text):
-        """Update outline display based on LLM suggestion.
-        
-        When LLM generates or suggests a markdown checklist outline,
-        this method shows it in the outline display. User can approve
-        by clicking "Start Writing" or request modifications by continuing
-        the conversation.
-        
-        Args:
-            outline_text: Markdown checklist outline from LLM
-        """
-        self.outline_display.setPlainText(outline_text)
-        
-        # Enable Start Writing button when we have an outline
-        self._update_start_writing_state()
 
-    def _update_start_writing_state(self):
-        """Enable Start Writing button when outline is non-empty."""
-        outline_text = self.outline_display.toPlainText().strip()
-        self.start_writing_button.setEnabled(bool(outline_text))
-    
+    def _render_conversation(self):
+        """Render the conversation markdown to the display."""
+        self.conversation_display.setMarkdown(self._conversation_markdown)
+        # Auto-scroll to bottom
+        scrollbar = self.conversation_display.verticalScrollBar()
+        scrollbar.setValue(scrollbar.maximum())
+
+    def _extract_outline_from_conversation(self):
+        """Extract outline from conversation in various formats.
+
+        Looks for structured outline content including:
+        - Markdown checklists (- [ ] or - [x])
+        - Bullet points (- )
+        - Numbered lists (1., 2., etc.)
+        - Act/Chapter headings (## Act I, Act 1:, etc.)
+
+        Returns the most recent complete outline found.
+
+        Returns:
+            str: Outline text or empty string if none found
+        """
+        import re
+
+        lines = self._conversation_markdown.split("\n")
+        outline_lines = []
+        in_outline = False
+
+        # Find the last contiguous block of outline-like content
+        for line in reversed(lines):
+            stripped = line.strip()
+
+            # Check if this line looks like outline content
+            is_outline_line = (
+                re.match(r"^- \[[x ]\]", stripped)  # Checklist item
+                or re.match(r"^- ", stripped)  # Bullet point
+                or re.match(r"^\d+\.", stripped)  # Numbered item
+                or re.match(r"^#{1,3}\s+", stripped)  # Heading (##, ###)
+                or re.match(
+                    r"^(Act|Chapter|Part)\s+", stripped, re.IGNORECASE
+                )  # Act/Chapter
+                or re.match(r"^\*\*", stripped)  # Bold text (often used for headings)
+            )
+
+            if is_outline_line:
+                outline_lines.insert(0, stripped)
+                in_outline = True
+            elif (
+                in_outline
+                and stripped
+                and not stripped.startswith("**Assistant:**")
+                and not stripped.startswith("**You:**")
+            ):
+                # Hit non-outline content after finding outline - but keep going if it's just empty lines
+                # Stop if we hit a conversational marker
+                break
+            elif in_outline and not stripped:
+                # Empty line within outline - keep it for formatting
+                outline_lines.insert(0, "")
+
+        # Clean up - remove leading/trailing empty lines
+        while outline_lines and not outline_lines[0]:
+            outline_lines.pop(0)
+        while outline_lines and not outline_lines[-1]:
+            outline_lines.pop()
+
+        outline = "\n".join(outline_lines)
+
+        # Convert to checklist format if it's not already
+        if outline and not re.search(r"- \[[x ]\]", outline):
+            # Convert bullet points or numbered lists to checklists
+            converted_lines = []
+            for line in outline_lines:
+                stripped = line.strip()
+                if re.match(r"^- ", stripped):
+                    # Already a bullet, convert to checklist
+                    converted_lines.append(re.sub(r"^- ", "- [ ] ", stripped))
+                elif re.match(r"^\d+\.\s+", stripped):
+                    # Numbered item, convert to checklist
+                    converted_lines.append(re.sub(r"^\d+\.\s+", "- [ ] ", stripped))
+                elif stripped:
+                    # Heading or other content, keep as-is (or convert to checklist if it seems like a task)
+                    if not re.match(r"^#{1,3}\s+", stripped):
+                        # Not a heading, treat as task
+                        converted_lines.append(f"- [ ] {stripped}")
+                    else:
+                        converted_lines.append(stripped)
+                else:
+                    converted_lines.append(line)
+
+            outline = "\n".join(converted_lines)
+
+        return outline
+
     def get_conversation_text(self):
         """Get the full conversation text.
-        
+
         Returns:
             str: The conversation history
         """
-        return self.conversation_display.toPlainText()
-    
+        return self._conversation_markdown
+
     def get_current_outline(self):
-        """Get the current outline text.
-        
+        """Get the current outline from the conversation.
+
         Returns:
-            str: The markdown checklist outline
+            str: The markdown checklist outline extracted from conversation
         """
-        return self.outline_display.toPlainText()
-    
+        return self._extract_outline_from_conversation()
+
     def show_with_initial_prompt(self):
         """Show the dialog and display the initial prompt."""
-        self._append_conversation(f"Assistant: {self._initial_prompt}", is_user=False)
+        self._conversation_markdown = f"**Assistant:** {self._initial_prompt}\n"
+        self._render_conversation()
         self.user_input_field.setFocus()
         return self.exec_()

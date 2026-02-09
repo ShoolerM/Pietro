@@ -1612,8 +1612,8 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
             initial_prompt=self.settings_model.planning_prompt_template,
         )
 
-        # State for planning conversation
-        self._planning_conversation_state = {"outline_text": "", "llm_ready": True}
+        # State for planning conversation - maintain full conversation history
+        self._planning_conversation_history = []  # List of {role: "user"/"assistant", content: str}
 
         # Connect dialog signals
         dialog.user_input_ready.connect(
@@ -1644,44 +1644,76 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
         # Set waiting state
         dialog.set_waiting.emit(True)
 
+        # Add user message to conversation history
+        self._planning_conversation_history.append(
+            {"role": "user", "content": user_text}
+        )
+
         # Query RAG databases for relevant context
         rag_context = self.rag_controller.query_databases(user_text)
 
-        # Build query for planning - request outline in markdown checklist format
-        planning_prompt = f"""User input for story planning: {user_text}"""
+        # Get current outline from dialog
+        current_outline = dialog.get_current_outline()
+
+        # Build system message with instructions
+        system_content = """You are a creative writing assistant helping plan a story outline.
+
+Your role is to:
+1. Ask clarifying questions in the CHAT to help develop the story idea
+2. When the user is ready, provide a complete outline in markdown checklist format
+3. If an outline already exists, you can refine/update it based on user feedback
+
+IMPORTANT RULES:
+- Ask questions and have discussions in the CHAT (normal conversation)
+- ONLY provide a checklist outline when the user explicitly asks for it or when you have enough information
+- If providing an outline, format it as a markdown checklist ONLY (no other text):
+  - [ ] Plot point 1
+  - [ ] Plot point 2
+  - [ ] Plot point 3
+- If refining an existing outline, provide the complete updated outline as a checklist"""
+
+        # Add current outline to system context if it exists
+        if current_outline:
+            system_content += f"\n\nCURRENT OUTLINE:\n{current_outline}\n\nThe user may want to refine this outline or discuss changes."
 
         # Add RAG context if available
         if rag_context:
-            planning_prompt += (
+            system_content += (
                 f"\n\nRELEVANT CONTEXT FROM KNOWLEDGE BASE:\n{rag_context}"
             )
-
-        planning_prompt += """\n\nBased on this input and context, provide the next question to help develop the story outline, 
-OR if the user seems ready, provide a complete story outline in markdown checklist format:
-- [ ] Task 1
-- [ ] Task 2
-- [ ] Task 3
-
-If you're providing an outline, format it ONLY as a checklist with no other text."""
 
         def planning_thread():
             """Run LLM in background thread with proper signal emission."""
             try:
-                from langchain_core.messages import SystemMessage, HumanMessage
-
-                system_msg = SystemMessage(
-                    content="You are a creative writing assistant helping plan a story outline."
+                from langchain_core.messages import (
+                    SystemMessage,
+                    HumanMessage,
+                    AIMessage,
                 )
-                human_msg = HumanMessage(content=planning_prompt)
+
+                # Build messages list with full conversation history
+                messages = [SystemMessage(content=system_content)]
+
+                # Add conversation history
+                for msg in self._planning_conversation_history:
+                    if msg["role"] == "user":
+                        messages.append(HumanMessage(content=msg["content"]))
+                    else:
+                        messages.append(AIMessage(content=msg["content"]))
 
                 full_response = ""
                 # Stream response tokens
-                for chunk in self.llm_controller.llm.stream([system_msg, human_msg]):
+                for chunk in self.llm_controller.llm.stream(messages):
                     if hasattr(chunk, "content"):
                         text = chunk.content
                         full_response += text
                         # Emit token signal (thread-safe via Qt signals)
                         dialog.llm_token_received.emit(text)
+
+                # Add assistant response to history
+                self._planning_conversation_history.append(
+                    {"role": "assistant", "content": full_response}
+                )
 
                 # Emit completion signal with full response
                 dialog.llm_response_complete.emit(full_response)
@@ -2016,16 +2048,26 @@ If you're providing an outline, format it ONLY as a checklist with no other text
         # Build query
         query_parts = []
 
-        if story_for_llm:
-            query_parts.append(f"Story so far:\n```\n{story_for_llm}\n```\n\n")
+        # Show full outline for context
+        query_parts.append(f"COMPLETE STORY OUTLINE:\n{state['outline']}\n\n")
+        query_parts.append(f"{'=' * 60}\n\n")
 
-        # Add current task focus
-        query_parts.append(f"CURRENT PLOT POINT TO ADDRESS:\n{current_task}\n\n")
+        if story_for_llm:
+            query_parts.append(f"STORY SO FAR:\n```\n{story_for_llm}\n```\n\n")
+            is_first_chunk = False
+        else:
+            query_parts.append(
+                f"This is the BEGINNING of the story. Start from the very first plot point.\n\n"
+            )
+            is_first_chunk = True
+
+        # Add current task focus with clear instructions
+        query_parts.append(f"CURRENT PLOT POINT TO ADDRESS NOW:\n{current_task}\n\n")
 
         # Add remaining tasks for context
         remaining_tasks = state["tasks"][state["current_task_index"] + 1 :]
         if remaining_tasks:
-            query_parts.append(f"UPCOMING PLOT POINTS (for reference):\n")
+            query_parts.append(f"UPCOMING PLOT POINTS (do NOT write these yet):\n")
             for i, task in enumerate(remaining_tasks[:3], 1):  # Show next 3
                 query_parts.append(f"{i}. {task}\n")
             query_parts.append("\n")
@@ -2041,11 +2083,20 @@ If you're providing an outline, format it ONLY as a checklist with no other text
         if state["supp_text"]:
             query_parts.append(f"ADDITIONAL INSTRUCTIONS:\n{state['supp_text']}\n\n")
 
-        query_parts.append(
-            f"Continue the story addressing the current plot point. "
-            f"Write EXACTLY {state['paragraphs_per_chunk']} paragraphs. "
-            f"Focus on developing the current plot point while maintaining narrative flow."
-        )
+        # Different instructions for first chunk vs continuation
+        if is_first_chunk:
+            query_parts.append(
+                f"START the story by addressing the first plot point above. "
+                f"Write EXACTLY {state['paragraphs_per_chunk']} paragraphs. "
+                f"Focus ONLY on the current plot point. Do NOT jump ahead to later plot points."
+            )
+        else:
+            query_parts.append(
+                f"CONTINUE the story by addressing the current plot point above. "
+                f"Write EXACTLY {state['paragraphs_per_chunk']} paragraphs. "
+                f"Focus ONLY on the current plot point while maintaining narrative flow from what came before. "
+                f"Do NOT jump ahead to later plot points."
+            )
 
         final_query = "".join(query_parts)
 
