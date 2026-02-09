@@ -3,7 +3,7 @@
 import hashlib
 import sys
 import threading
-import time
+import re
 from typing import List, Optional
 from pydantic import BaseModel, Field
 from PyQt5 import QtWidgets, QtCore
@@ -18,6 +18,9 @@ from views.main_view import MainView
 from controllers.prompt_controller import PromptController
 from controllers.llm_controller import LLMController
 from controllers.rag_controller import RAGController
+from views.planning_mode_dialog import PlanningModeDialog
+
+from pathlib import Path
 
 
 class NotesGeneratorSignals(QtCore.QObject):
@@ -43,6 +46,10 @@ class OutlinePlotPoint(BaseModel):
 
     description: str = Field(
         description="A specific narrative event or action that happens in the story"
+    )
+    completed: bool = Field(
+        default=False,
+        description="True if this plot point has already been written in the existing story, False if it still needs to be written",
     )
 
 
@@ -867,8 +874,6 @@ class MainController:
     def save_summary_state(self):
         """Save the current summary state to disk."""
         try:
-            from pathlib import Path
-
             settings_dir = Path("settings")
             settings_dir.mkdir(exist_ok=True)
             summary_file = settings_dir / "story_summary_state.json"
@@ -879,8 +884,6 @@ class MainController:
     def load_summary_state(self):
         """Load the summary state from disk."""
         try:
-            from pathlib import Path
-
             settings_dir = Path("settings")
             summary_file = settings_dir / "story_summary_state.json"
             if summary_file.exists():
@@ -1307,15 +1310,15 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
         # Clear thinking panel and provide instructions
         self.view.clear_thinking_text()
         self.view.append_logs(f"\n{'=' * 60}\n")
-        self.view.append_logs(f"🤖 AUTO STORY BUILD MODE ACTIVATED\n")
+        self.view.append_logs("🤖 AUTO STORY BUILD MODE ACTIVATED\n")
         self.view.append_logs(f"{'=' * 60}\n\n")
         self.view.append_logs(f"Initial Prompt: {initial_prompt[:100]}...\n\n")
-        self.view.append_logs(f"Configuration:\n")
-        self.view.append_logs(f"  • Chunk size: 3 paragraphs\n")
-        self.view.append_logs(f"  • Summarize every: 2-3 chunks\n")
-        self.view.append_logs(f"  • Max chunks: 10 (configurable)\n")
-        self.view.append_logs(f"  • RAG: Enabled (refresh after each chunk)\n\n")
-        self.view.append_logs(f"Press STOP to end generation at any time.\n")
+        self.view.append_logs("Configuration:\n")
+        self.view.append_logs("  • Chunk size: 3 paragraphs\n")
+        self.view.append_logs("  • Summarize every: 2-3 chunks\n")
+        self.view.append_logs("  • Max chunks: 10 (configurable)\n")
+        self.view.append_logs("  • RAG: Enabled (refresh after each chunk)\n\n")
+        self.view.append_logs("Press STOP to end generation at any time.\n")
         self.view.append_logs(f"{'=' * 60}\n\n")
 
         # Sync markdown content with any user edits
@@ -1352,7 +1355,7 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
         # Check if we should stop
         if state["chunk_count"] >= state["max_chunks"]:
             self.view.append_logs(f"\n\n{'=' * 60}\n")
-            self.view.append_logs(f"✅ AUTO BUILD COMPLETE\n")
+            self.view.append_logs("✅ AUTO BUILD COMPLETE\n")
             self.view.append_logs(f"Generated {state['chunk_count']} chunks total.\n")
             self.view.append_logs(f"{'=' * 60}\n")
             self.view.set_stop_enabled(False)
@@ -1363,7 +1366,7 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
 
         if self.llm_model.stop_generation:
             self.view.append_logs(f"\n\n{'=' * 60}\n")
-            self.view.append_logs(f"⏹️ AUTO BUILD STOPPED BY USER\n")
+            self.view.append_logs("⏹️ AUTO BUILD STOPPED BY USER\n")
             self.view.append_logs(f"Generated {state['chunk_count']} chunks.\n")
             self.view.append_logs(f"{'=' * 60}\n")
             self.view.set_stop_enabled(False)
@@ -1404,7 +1407,7 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
             and state["supp_text"]
             and self.settings_model.summarize_prompts
         ):
-            self.view.append_logs(f"🔄 Condensing supplemental prompts...\n")
+            self.view.append_logs("🔄 Condensing supplemental prompts...\n")
             state["supp_text"], supp_tokens = (
                 self.llm_controller.summarize_supplemental(
                     state["supp_text"], max_supp_tokens
@@ -1417,7 +1420,7 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
             and state["system_prompt"]
             and self.settings_model.summarize_prompts
         ):
-            self.view.append_logs(f"🔄 Condensing system prompt...\n")
+            self.view.append_logs("🔄 Condensing system prompt...\n")
             state["system_prompt"], system_tokens = (
                 self.llm_controller.summarize_system_prompt(
                     state["system_prompt"], max_system_tokens
@@ -1430,7 +1433,7 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
             and state["notes"]
             and self.settings_model.summarize_prompts
         ):
-            self.view.append_logs(f"🔄 Condensing notes...\n")
+            self.view.append_logs("🔄 Condensing notes...\n")
             state["notes"], notes_tokens = self.llm_controller.summarize_supplemental(
                 state["notes"], max_notes_tokens
             )
@@ -1447,7 +1450,7 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
                 f"{state['initial_prompt']}\n\nRecent story content:\n{recent_story}"
             )
 
-        self.view.append_logs(f"🔍 Querying RAG databases...\n")
+        self.view.append_logs("🔍 Querying RAG databases...\n")
         rag_context = self.rag_controller.query_databases(rag_query)
 
         if rag_context:
@@ -1458,7 +1461,7 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
                 self.view.append_logs(
                     f"  ⚠️ RAG context too large ({rag_tokens} > {max_rag_tokens})\n"
                 )
-                self.view.append_logs(f"  🔄 Condensing RAG context...\n")
+                self.view.append_logs("  🔄 Condensing RAG context...\n")
                 rag_context, rag_tokens = self.llm_controller.summarize_rag_context(
                     rag_context, max_rag_tokens
                 )
@@ -1626,8 +1629,6 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
         User converses until satisfied with outline, then clicks "Start Writing"
         to proceed with generation guided by the outline.
         """
-        from views.planning_mode_dialog import PlanningModeDialog
-
         # Create and show the planning dialog
         dialog = PlanningModeDialog(
             parent=self.view,
@@ -1685,6 +1686,25 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
         # Get current outline from dialog
         current_outline = dialog.get_current_outline()
 
+        # Get existing story content and context
+        existing_story = self.story_model.content
+        existing_notes = self.story_model.notes
+
+        # Use the same summarization approach as normal writing mode
+        # Extract recent content (max 2000 tokens) and get summary context
+        story_context = ""
+        if existing_story:
+            max_recent_tokens = 2000  # Reasonable amount for outline analysis
+            raw_recent, split_pos = self.story_model.extract_recent_content(
+                existing_story, max_recent_tokens
+            )
+            raw_tokens = self.story_model.estimate_token_count(raw_recent)
+
+            # Get formatted context with summary + recent content
+            story_context, context_tokens = self.summary_model.get_context_for_llm(
+                raw_recent, raw_tokens
+            )
+
         # Build system message with instructions
         system_content = """You are a creative writing assistant helping plan a story outline.
 
@@ -1692,19 +1712,44 @@ Your role is to:
 1. Ask clarifying questions in the CHAT to help develop the story idea
 2. When the user is ready, provide a complete outline in markdown checklist format
 3. If an outline already exists, you can refine/update it based on user feedback
+4. If story content already exists, analyze what's been written and mark completed plot points
 
 IMPORTANT RULES:
 - Ask questions and have discussions in the CHAT (normal conversation)
 - ONLY provide a checklist outline when the user explicitly asks for it or when you have enough information
 - If providing an outline, format it as a markdown checklist with ONLY actual plot points/story events:
-  - [ ] Plot point 1 (concrete story event)
-  - [ ] Plot point 2 (concrete story event)
-  - [ ] Plot point 3 (concrete story event)
+  - [x] Completed plot point (ONLY if this specific event is already written in the existing story)
+  - [ ] Remaining plot point (if not yet written OR if you're adding a new plot point to extend the story)
+- If NO story content exists yet, ALL plot points MUST be marked as [ ] (unchecked/remaining)
+- When story content exists, carefully analyze it and mark ONLY the plot points that describe events explicitly covered in that text as [x] completed
+- When adding NEW plot points to continue or extend the story, those new points MUST be marked as [ ] (unchecked) because they haven't been written yet
+- The "completed" checkbox means "this event has already been written in the story" - NOT "this event should happen" or "this is part of the plan"
+- Completed items should summarize what was actually written in the existing story text
+- Remaining items should describe what still needs to be written
+- DO NOT mark items as completed unless they describe events that are explicitly written in the existing story content
 - DO NOT include metadata as checklist items (themes, setting descriptions, character lists, tone, style, etc.)
 - Each checklist item should describe a specific narrative event or action that happens in the story
 - You MAY include metadata/themes in regular text OUTSIDE the checklist if helpful
 - If refining an existing outline, provide the complete updated outline as a checklist
 - Focus on WHAT HAPPENS in the story, not abstract concepts or meta-information"""
+
+        # Add existing story content if any
+        if story_context:
+            system_content += (
+                "\n\n=== EXISTING STORY CONTENT (WHAT HAS BEEN WRITTEN) ==="
+            )
+            system_content += f"\n{story_context}"
+            system_content += (
+                "\n\nCRITICAL: Mark plot points as completed [x] ONLY if they describe events that are clearly written in the story text above. "
+                "If you're adding new plot points to continue the story, those MUST be unchecked [ ] because they haven't been written yet."
+            )
+        else:
+            system_content += "\n\n=== NO STORY CONTENT YET ==="
+            system_content += "\nThe story has not been started yet. ALL plot points in your outline must be marked as [ ] (unchecked)."
+
+        # Add existing notes if any
+        if existing_notes:
+            system_content += f"\n\nEXISTING NOTES:\n{existing_notes}"
 
         # Add current outline to system context if it exists
         if current_outline:
@@ -1753,21 +1798,67 @@ IMPORTANT RULES:
 
                 full_response = ""
 
-                # If requesting outline, use structured output
-                if requesting_outline and not current_outline:
-                    # Use structured output for outline generation
-                    structured_llm = self.llm_controller.llm.with_structured_output(
-                        StoryOutline
-                    )
-                    result = structured_llm.invoke(messages)
+                # If requesting outline, use structured output with json_schema
+                if requesting_outline:
+                    # Convert Pydantic model to JSON schema for the API
+                    json_schema = {
+                        "type": "json_schema",
+                        "json_schema": {
+                            "name": "story_outline",
+                            "strict": True,
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "plot_points": {
+                                        "type": "array",
+                                        "items": {
+                                            "type": "object",
+                                            "properties": {
+                                                "description": {
+                                                    "type": "string",
+                                                    "description": "A specific narrative event or action that happens in the story",
+                                                },
+                                                "completed": {
+                                                    "type": "boolean",
+                                                    "description": "True if this plot point has already been written in the existing story, False if it still needs to be written",
+                                                },
+                                            },
+                                            "required": ["description", "completed"],
+                                            "additionalProperties": False,
+                                        },
+                                    },
+                                    "discussion": {
+                                        "type": ["string", "null"],
+                                        "description": "Optional discussion, questions, or explanatory text about the outline (but not the outline itself)",
+                                    },
+                                },
+                                "required": ["plot_points"],
+                                "additionalProperties": False,
+                            },
+                        },
+                    }
 
-                    # Convert structured output to markdown checklist
-                    if result.discussion:
-                        full_response = result.discussion + "\n\n"
+                    # Bind the json_schema response format directly
+                    structured_llm = self.llm_controller.llm.bind(
+                        response_format=json_schema
+                    )
+                    response = structured_llm.invoke(messages)
+
+                    # Parse the JSON response
+                    import json
+
+                    result = json.loads(response.content)
+
+                    # Convert to markdown checklist
+                    if result.get("discussion"):
+                        full_response = result["discussion"] + "\n\n"
 
                     full_response += "Here's your outline:\n\n"
-                    for plot_point in result.plot_points:
-                        full_response += f"- [ ] {plot_point.description}\n"
+                    for plot_point in result.get("plot_points", []):
+                        checkbox = (
+                            "[x]" if plot_point.get("completed", False) else "[ ]"
+                        )
+                        full_response += f"- {checkbox} {plot_point['description']}\n"
 
                     # Emit the formatted response
                     dialog.llm_token_received.emit(full_response)
@@ -1806,59 +1897,6 @@ IMPORTANT RULES:
         Args:
             outline: The markdown checklist outline from the dialog
         """
-        # Check if there's existing story content or previous session data
-        existing_story = self.view.get_story_content().strip()
-        previous_outline = self.story_model.planning_outline
-        has_summary = (
-            self.summary_model.rolling_summary or self.summary_model.total_chunks > 0
-        )
-        outline_changed = previous_outline and previous_outline != outline
-
-        # Determine if we need to clear - either because:
-        # 1. There's visible story content, OR
-        # 2. The outline changed (even if editor was manually cleared), OR
-        # 3. There's a summary in memory from a previous story
-        needs_clearing = (
-            existing_story or outline_changed or (has_summary and not existing_story)
-        )
-
-        if needs_clearing:
-            # Ask user what to do with existing content/state
-            if outline_changed or (has_summary and not existing_story):
-                msg = (
-                    "Detected previous story session data.\n\n"
-                    "This includes summaries or context from a previous story that may contaminate the new one.\n\n"
-                    "Do you want to:\n"
-                    "• YES - Clear all previous data and start fresh (RECOMMENDED)\n"
-                    "• NO - Keep previous context (may mix old and new stories)\n"
-                    "• CANCEL - Go back to planning mode"
-                )
-            else:
-                msg = (
-                    "There is existing story content in the editor.\n\n"
-                    "Do you want to:\n"
-                    "• YES - Clear it and start fresh with this outline\n"
-                    "• NO - Continue from the existing content\n"
-                    "• CANCEL - Go back to planning mode"
-                )
-
-            from PyQt5.QtWidgets import QMessageBox
-
-            reply = QMessageBox.question(
-                self.view,
-                "Clear Previous Session?",
-                msg,
-                QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel,
-                QMessageBox.Yes,
-            )
-
-            if reply == QMessageBox.Cancel:
-                # User cancelled - don't proceed
-                return
-            elif reply == QMessageBox.Yes:
-                # Clear existing content and all session state
-                self._on_clear()
-
         # Store outline in story model
         self.story_model.planning_outline = outline
         self.story_model.planning_active = True
@@ -1886,8 +1924,6 @@ IMPORTANT RULES:
             supp_text: Supplemental prompts
             system_prompt: System prompt
         """
-        import re
-        import hashlib
 
         # Parse outline into tasks
         task_pattern = r"- \[[x ]\]\s*(.+?)(?=\n- \[|$)"
@@ -1951,17 +1987,12 @@ IMPORTANT RULES:
         # Clear thinking panel and provide instructions
         self.view.clear_thinking_text()
         self.view.append_logs(f"\n{'=' * 60}\n")
-        self.view.append_logs(f"📋 PLANNING MODE: OUTLINE-DRIVEN GENERATION\n")
+        self.view.append_logs("📋 PLANNING MODE: OUTLINE-DRIVEN GENERATION\n")
         self.view.append_logs(f"{'=' * 60}\n\n")
         self.view.append_logs(f"Outline contains {len(tasks)} plot points:\n")
         for i, task in enumerate(tasks, 1):
             task_preview = task[:80] + "..." if len(task) > 80 else task
             self.view.append_logs(f"  {i}. {task_preview}\n")
-        self.view.append_logs(f"\nConfiguration:\n")
-        self.view.append_logs(f"  • Chunk size: 3 paragraphs per plot point\n")
-        self.view.append_logs(f"  • RAG: Enabled (refresh after each chunk)\n")
-        self.view.append_logs(f"  • Summarize: After every 3 chunks\n\n")
-        self.view.append_logs(f"Press STOP to end generation at any time.\n")
         self.view.append_logs(f"{'=' * 60}\n\n")
 
         # Sync markdown content with any user edits
