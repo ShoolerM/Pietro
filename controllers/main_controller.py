@@ -4,6 +4,8 @@ import hashlib
 import sys
 import threading
 import time
+from typing import List, Optional
+from pydantic import BaseModel, Field
 from PyQt5 import QtWidgets, QtCore
 
 from models.story_model import StoryModel
@@ -34,6 +36,26 @@ class CondenserSignals(QtCore.QObject):
     )  # condensed supp_text, system_prompt, notes
     condense_error = QtCore.pyqtSignal(str)  # error_message
     thinking_update = QtCore.pyqtSignal(str)  # status message for thinking panel
+
+
+class OutlinePlotPoint(BaseModel):
+    """A single plot point in a story outline."""
+
+    description: str = Field(
+        description="A specific narrative event or action that happens in the story"
+    )
+
+
+class StoryOutline(BaseModel):
+    """Structured story outline with plot points."""
+
+    plot_points: List[OutlinePlotPoint] = Field(
+        description="List of specific story events/actions in sequential order. Do NOT include themes, setting descriptions, character lists, or other metadata."
+    )
+    discussion: Optional[str] = Field(
+        default=None,
+        description="Optional discussion, questions, or explanatory text about the outline (but not the outline itself)",
+    )
 
 
 class MainController:
@@ -1612,8 +1634,13 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
             initial_prompt=self.settings_model.planning_prompt_template,
         )
 
+        # Restore previous conversation if it exists
+        if hasattr(self, "_planning_conversation_markdown"):
+            dialog.set_conversation(self._planning_conversation_markdown)
+
         # State for planning conversation - maintain full conversation history
-        self._planning_conversation_history = []  # List of {role: "user"/"assistant", content: str}
+        if not hasattr(self, "_planning_conversation_history"):
+            self._planning_conversation_history = []  # List of {role: "user"/"assistant", content: str}
 
         # Connect dialog signals
         dialog.user_input_ready.connect(
@@ -1626,6 +1653,9 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
 
         # Show dialog with initial prompt
         result = dialog.show_with_initial_prompt()
+
+        # Save conversation for next time (whether accepted or cancelled)
+        self._planning_conversation_markdown = dialog.get_conversation_text()
 
         if result == QtWidgets.QDialog.Accepted:
             # Dialog accepted with "Start Writing" - outline was handled in _on_planning_start_writing
@@ -1666,11 +1696,15 @@ Your role is to:
 IMPORTANT RULES:
 - Ask questions and have discussions in the CHAT (normal conversation)
 - ONLY provide a checklist outline when the user explicitly asks for it or when you have enough information
-- If providing an outline, format it as a markdown checklist ONLY (no other text):
-  - [ ] Plot point 1
-  - [ ] Plot point 2
-  - [ ] Plot point 3
-- If refining an existing outline, provide the complete updated outline as a checklist"""
+- If providing an outline, format it as a markdown checklist with ONLY actual plot points/story events:
+  - [ ] Plot point 1 (concrete story event)
+  - [ ] Plot point 2 (concrete story event)
+  - [ ] Plot point 3 (concrete story event)
+- DO NOT include metadata as checklist items (themes, setting descriptions, character lists, tone, style, etc.)
+- Each checklist item should describe a specific narrative event or action that happens in the story
+- You MAY include metadata/themes in regular text OUTSIDE the checklist if helpful
+- If refining an existing outline, provide the complete updated outline as a checklist
+- Focus on WHAT HAPPENS in the story, not abstract concepts or meta-information"""
 
         # Add current outline to system context if it exists
         if current_outline:
@@ -1701,14 +1735,50 @@ IMPORTANT RULES:
                     else:
                         messages.append(AIMessage(content=msg["content"]))
 
+                # Check if user is requesting an outline (contains keywords)
+                user_msg_lower = user_text.lower()
+                requesting_outline = any(
+                    keyword in user_msg_lower
+                    for keyword in [
+                        "outline",
+                        "plot points",
+                        "story plan",
+                        "structure",
+                        "give me",
+                        "create",
+                        "write",
+                        "make",
+                    ]
+                )
+
                 full_response = ""
-                # Stream response tokens
-                for chunk in self.llm_controller.llm.stream(messages):
-                    if hasattr(chunk, "content"):
-                        text = chunk.content
-                        full_response += text
-                        # Emit token signal (thread-safe via Qt signals)
-                        dialog.llm_token_received.emit(text)
+
+                # If requesting outline, use structured output
+                if requesting_outline and not current_outline:
+                    # Use structured output for outline generation
+                    structured_llm = self.llm_controller.llm.with_structured_output(
+                        StoryOutline
+                    )
+                    result = structured_llm.invoke(messages)
+
+                    # Convert structured output to markdown checklist
+                    if result.discussion:
+                        full_response = result.discussion + "\n\n"
+
+                    full_response += "Here's your outline:\n\n"
+                    for plot_point in result.plot_points:
+                        full_response += f"- [ ] {plot_point.description}\n"
+
+                    # Emit the formatted response
+                    dialog.llm_token_received.emit(full_response)
+                else:
+                    # Regular streaming for discussion/refinement
+                    for chunk in self.llm_controller.llm.stream(messages):
+                        if hasattr(chunk, "content"):
+                            text = chunk.content
+                            full_response += text
+                            # Emit token signal (thread-safe via Qt signals)
+                            dialog.llm_token_received.emit(text)
 
                 # Add assistant response to history
                 self._planning_conversation_history.append(

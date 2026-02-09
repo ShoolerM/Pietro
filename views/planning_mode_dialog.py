@@ -121,6 +121,15 @@ class PlanningModeDialog(QtWidgets.QDialog):
         # Bottom buttons
         button_layout = QtWidgets.QHBoxLayout()
 
+        clear_button = QtWidgets.QPushButton("Clear Conversation")
+        clear_button.setStyleSheet(
+            "QPushButton { background-color: #ff9800; color: white; padding: 6px; }"
+        )
+        clear_button.clicked.connect(self._on_clear_conversation)
+        button_layout.addWidget(clear_button)
+
+        button_layout.addStretch()
+
         self.start_writing_button = QtWidgets.QPushButton("Start Writing")
         self.start_writing_button.setStyleSheet(
             "QPushButton { background-color: #4CAF50; color: white; "
@@ -164,7 +173,7 @@ class PlanningModeDialog(QtWidgets.QDialog):
 
         # Reset per-response accumulator and add assistant prefix
         self._current_llm_response = ""
-        self._conversation_markdown += "\n\n**Assistant:** "
+        self._conversation_markdown += "\n\n**Assistant:**\n"
         self._render_conversation()
 
         # Emit signal for controller to handle LLM response
@@ -189,6 +198,20 @@ class PlanningModeDialog(QtWidgets.QDialog):
 
         self.start_writing_clicked.emit(outline)
         self.accept()
+
+    def _on_clear_conversation(self):
+        """Handle Clear Conversation button click."""
+        reply = QtWidgets.QMessageBox.question(
+            self,
+            "Clear Conversation",
+            "Are you sure you want to clear this conversation and start fresh?",
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+            QtWidgets.QMessageBox.No,
+        )
+        if reply == QtWidgets.QMessageBox.Yes:
+            self._conversation_markdown = f"**Assistant:**\n{self._initial_prompt}\n"
+            self._current_llm_response = ""
+            self._render_conversation()
 
     def _on_cancel(self):
         """Handle Cancel button click."""
@@ -310,8 +333,61 @@ class PlanningModeDialog(QtWidgets.QDialog):
 
         outline = "\n".join(outline_lines)
 
+        # Filter out non-plot-point items (metadata, themes, notes, etc.)
+        # These are typically descriptive headers that aren't actual story events
+        filtered_lines = []
+        for line in outline_lines:
+            stripped = line.strip()
+
+            # Skip empty lines temporarily (we'll add them back if between plot points)
+            if not stripped:
+                continue
+
+            # Check if this is a metadata/thematic header (not an actual plot point)
+            # Look for patterns like "**Themes:**", "**Setting:**", "Themes", etc.
+            is_metadata = False
+
+            # Pattern 1: Bold metadata headers (e.g., "**Themes:**")
+            if re.match(
+                r"^\*\*\s*(Themes?|Setting|Characters?|Tone|Style|Notes?|Genre|Mood|Atmosphere)s?\s*[:]*\s*\*\*",
+                stripped,
+                re.IGNORECASE,
+            ):
+                is_metadata = True
+
+            # Pattern 2: Checklist items that are just metadata labels
+            if re.match(
+                r"^- \[[ x]\]\s*\*\*\s*(Themes?|Setting|Characters?|Tone|Style|Notes?|Genre|Mood|Atmosphere)s?\s*[:]*",
+                stripped,
+                re.IGNORECASE,
+            ):
+                is_metadata = True
+
+            # Pattern 3: Lines that look like thematic descriptions rather than plot events
+            # These often contain abstract concepts without concrete actions
+            if re.search(
+                r"(Loyalty|Perseverance|Trust|Hope|Fear|Courage|Love|Friendship|Betrayal|Redemption|Loss|Growth)",
+                stripped,
+                re.IGNORECASE,
+            ):
+                # Check if it's ONLY themes (no concrete action verbs)
+                has_action = re.search(
+                    r"\b(introduce|encounter|discover|find|chase|escape|reach|arrive|meet|fight|overcome|realize|decide)\b",
+                    stripped,
+                    re.IGNORECASE,
+                )
+                if (
+                    not has_action and len(stripped.split()) < 15
+                ):  # Short lines that are just themes
+                    is_metadata = True
+
+            if not is_metadata:
+                filtered_lines.append(line)
+
+        outline_lines = filtered_lines
+
         # Convert to checklist format if it's not already
-        if outline and not re.search(r"- \[[x ]\]", outline):
+        if outline_lines and not re.search(r"- \[[x ]\]", "\n".join(outline_lines)):
             # Convert bullet points or numbered lists to checklists
             converted_lines = []
             for line in outline_lines:
@@ -352,9 +428,21 @@ class PlanningModeDialog(QtWidgets.QDialog):
         """
         return self._extract_outline_from_conversation()
 
+    def set_conversation(self, conversation_markdown):
+        """Set the conversation content (for persistence).
+
+        Args:
+            conversation_markdown: Previously saved conversation markdown
+        """
+        if conversation_markdown:
+            self._conversation_markdown = conversation_markdown
+        else:
+            self._conversation_markdown = f"**Assistant:**\n{self._initial_prompt}\n"
+
     def show_with_initial_prompt(self):
         """Show the dialog and display the initial prompt."""
-        self._conversation_markdown = f"**Assistant:** {self._initial_prompt}\n"
+        if not self._conversation_markdown:
+            self._conversation_markdown = f"**Assistant:**\n{self._initial_prompt}\n"
         self._render_conversation()
         self.user_input_field.setFocus()
         return self.exec_()
