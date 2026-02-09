@@ -51,7 +51,7 @@ An intelligent story writing application that combines **LangChain**, **PyQt5**,
 
 2. **Clone the repository**
    ```bash
-   git clone <repository-url>
+   git clone https://github.com/ShoolerM/Pietro
    cd Pietro
    ```
 
