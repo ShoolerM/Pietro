@@ -17,6 +17,7 @@ from controllers.llm_controller import LLMController
 from controllers.rag_controller import RAGController
 from controllers.planning_controller import PlanningController
 from models.planning_model import PlanningModel
+from models.model_context_database import detect_context_window
 
 from pathlib import Path
 
@@ -919,6 +920,20 @@ class MainController:
         )
         if profile:
             self._apply_model_profile(profile)
+        else:
+            # No saved profile - try auto-detection
+            try:
+                context_length, confidence, source = detect_context_window(model_name)
+
+                # Update settings and UI with detected value
+                self.settings_model.context_limit = context_length
+                self.view.set_context_limit(context_length)
+
+                # Save the detected value to profile for future use
+                self._save_current_model_profile()
+            except Exception as e:
+                print(f"Warning: Could not auto-detect context window: {e}")
+                # Fall back to existing behavior (keep current value)
 
         # Update the LLM model
         self.llm_controller.update_model(model_name)
