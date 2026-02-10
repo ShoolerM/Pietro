@@ -15,6 +15,7 @@ from views.main_view import MainView
 from controllers.prompt_controller import PromptController
 from controllers.llm_controller import LLMController
 from controllers.rag_controller import RAGController
+from controllers.context_controller import ContextController
 from controllers.planning_controller import PlanningController
 from models.planning_model import PlanningModel
 from models.model_context_database import detect_context_window
@@ -67,6 +68,13 @@ class MainController:
             self.llm_model, self.story_model, self.settings_model
         )
         self.rag_controller = RAGController(self.rag_model, self.view)
+        self.context_controller = ContextController(
+            self.story_model,
+            self.settings_model,
+            self.summary_model,
+            self.rag_controller,
+            self.rag_model,
+        )
         self.planning_controller = PlanningController(
             self.planning_model,
             self.story_model,
@@ -1061,9 +1069,6 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
             end_pos: End position of selection
             prompt: The change instruction from dialog
         """
-        # Get notes from prompts panel
-        notes = self.view.prompts_panel.get_notes_text().strip()
-
         # Get system prompt
         system_prompt = self.view.prompts_panel.get_system_prompt_text()
 
@@ -1078,20 +1083,51 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
         self.story_model.content = current_story
         self.story_model.save_to_history()
 
-        # Build query for text override with notes if available
-        query = f"""Rewrite the following text according to the instruction.
+        # Gather context using context controller
+        context = self.context_controller.gather_context_for_edit(
+            selected_text, start_pos, end_pos, prompt
+        )
+
+        # Build query with surrounding context and RAG
+        query = f"""Rewrite the following text according to the instruction."""
+
+        # Add context before if available
+        if context["context_before"]:
+            query += f"""
+
+CONTEXT BEFORE (do not modify this):
+{context["context_before"]}"""
+
+        query += f"""
 
 TEXT TO REWRITE:
-{selected_text}
+{selected_text}"""
+
+        # Add context after if available
+        if context["context_after"]:
+            query += f"""
+
+CONTEXT AFTER (do not modify this):
+{context["context_after"]}"""
+
+        query += f"""
 
 INSTRUCTION:
 {prompt}"""
 
-        if notes:
+        # Add RAG context if available
+        if context["rag_context"]:
+            query += f"""
+
+RELEVANT CONTEXT FROM KNOWLEDGE BASE:
+{context["rag_context"]}"""
+
+        # Add notes if available
+        if context["notes"]:
             query += f"""
 
 ADDITIONAL CONTEXT (author's notes):
-{notes}"""
+{context["notes"]}"""
 
         query += """
 
