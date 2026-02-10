@@ -135,24 +135,57 @@ class PlanningController:
         Returns:
             System message content with full context
         """
-        # Query RAG databases
-        rag_context = self.rag_controller.query_databases(user_text)
-
         # Get existing story content and notes
         existing_story = self.story_model.content
         existing_notes = self.story_model.notes
 
         # Extract story context using summarization
         story_context = ""
+        story_tokens = 0
         if existing_story:
             max_recent_tokens = 2000
             raw_recent, split_pos = self.story_model.extract_recent_content(
                 existing_story, max_recent_tokens
             )
             raw_tokens = self.story_model.estimate_token_count(raw_recent)
-            story_context, context_tokens = self.summary_model.get_context_for_llm(
+            story_context, story_tokens = self.summary_model.get_context_for_llm(
                 raw_recent, raw_tokens
             )
+
+        # Calculate dynamic RAG token budget
+        context_limit = self.settings_model.context_limit
+        output_reserve = 2000
+        # Estimate system prompt tokens (rough estimate)
+        system_prompt_estimate = 800
+        notes_tokens = (
+            self.story_model.estimate_token_count(existing_notes)
+            if existing_notes
+            else 0
+        )
+        outline_tokens = (
+            self.story_model.estimate_token_count(current_outline)
+            if current_outline
+            else 0
+        )
+        user_tokens = self.story_model.estimate_token_count(user_text)
+
+        available_for_rag = (
+            context_limit
+            - system_prompt_estimate
+            - story_tokens
+            - notes_tokens
+            - outline_tokens
+            - user_tokens
+            - output_reserve
+        )
+        # Use 20% for RAG in planning mode (keep it moderate to not overwhelm outline generation)
+        max_rag_tokens = int(available_for_rag * 0.20)
+        max_rag_tokens = max(500, min(max_rag_tokens, 2000))
+
+        # Query RAG databases with calculated budget
+        rag_context = self.rag_controller.query_databases(
+            user_text, max_tokens=max_rag_tokens
+        )
 
         # Build system message
         system_content = """You are a creative writing assistant helping plan a story outline.
@@ -249,16 +282,13 @@ IMPORTANT RULES:
 
             full_response = ""
 
-            if requesting_outline:
-                # Use structured output
-                full_response = self._generate_structured_outline(messages, dialog)
-            else:
-                # Regular streaming conversation
-                for chunk in self.llm_controller.llm.stream(messages):
-                    if hasattr(chunk, "content"):
-                        text = chunk.content
-                        full_response += text
-                        dialog.llm_token_received.emit(text)
+            # Use regular streaming for all responses (including outlines)
+            # The system prompt already instructs the model on proper outline formatting
+            for chunk in self.llm_controller.llm.stream(messages):
+                if hasattr(chunk, "content"):
+                    text = chunk.content
+                    full_response += text
+                    dialog.llm_token_received.emit(text)
 
             # Add to history
             self.planning_model.add_message("assistant", full_response)
@@ -573,9 +603,31 @@ IMPORTANT RULES:
         """
         current_task = state["original_tasks"][state["current_task_index"]]
 
+        # Calculate dynamic RAG token budget
+        context_limit = self.settings_model.context_limit
+        output_reserve = 2000
+        story_tokens = self.story_model.estimate_token_count(story_for_llm)
+        outline_tokens = self.story_model.estimate_token_count(state["outline"])
+        system_tokens = self.story_model.estimate_token_count(state["system_prompt"])
+
+        available_for_rag_and_story = (
+            context_limit
+            - story_tokens
+            - outline_tokens
+            - system_tokens
+            - output_reserve
+        )
+        # Use 25% for RAG in outline-driven mode (similar to auto-build)
+        max_rag_tokens = int(available_for_rag_and_story * 0.25)
+        max_rag_tokens = max(500, min(max_rag_tokens, 3000))
+
         # Query RAG
-        self.view.append_logs("🔍 Querying knowledge bases for task context...\n")
-        rag_context = self.rag_controller.query_databases(current_task)
+        self.view.append_logs(
+            f"🔍 Querying knowledge bases (budget: {max_rag_tokens:,} tokens)...\n"
+        )
+        rag_context = self.rag_controller.query_databases(
+            current_task, max_tokens=max_rag_tokens
+        )
         state["last_rag_context"] = rag_context
 
         if rag_context:

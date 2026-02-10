@@ -32,8 +32,6 @@ class MainView(QtWidgets.QWidget):
     rag_database_toggled = QtCore.pyqtSignal(str)  # database name
     rag_refresh_clicked = QtCore.pyqtSignal()
     rag_delete_database_clicked = QtCore.pyqtSignal(str)  # database name
-    rag_similarity_threshold_changed = QtCore.pyqtSignal(float)  # threshold value
-    rag_max_docs_changed = QtCore.pyqtSignal(int)  # max documents per database
     rag_max_chunks_changed = QtCore.pyqtSignal(int)  # max chunks for auto-build
     rag_summary_chunk_size_changed = QtCore.pyqtSignal(
         int
@@ -245,10 +243,6 @@ class MainView(QtWidgets.QWidget):
         self.prompts_panel.rag_delete_database_clicked.connect(
             self.rag_delete_database_clicked.emit
         )
-        self.prompts_panel.rag_similarity_threshold_changed.connect(
-            self.rag_similarity_threshold_changed.emit
-        )
-        self.prompts_panel.rag_max_docs_changed.connect(self.rag_max_docs_changed.emit)
         self.prompts_panel.rag_max_chunks_changed.connect(
             self.rag_max_chunks_changed.emit
         )
@@ -426,15 +420,11 @@ class MainView(QtWidgets.QWidget):
 
     def show_rag_settings_dialog(
         self,
-        current_max_docs=3,
-        current_threshold=0.0,
         current_max_chunks=10,
         current_summary_chunk_size=1500,
     ):
         """Show RAG settings dialog with current values."""
         return self.prompts_panel.show_rag_settings_dialog(
-            current_max_docs=current_max_docs,
-            current_threshold=current_threshold,
             current_max_chunks=current_max_chunks,
             current_summary_chunk_size=current_summary_chunk_size,
         )

@@ -120,8 +120,6 @@ class PromptsPanel(QtWidgets.QWidget):
     rag_database_toggled = QtCore.pyqtSignal(str)  # database name
     rag_refresh_clicked = QtCore.pyqtSignal()
     rag_delete_database_clicked = QtCore.pyqtSignal(str)  # database name
-    rag_similarity_threshold_changed = QtCore.pyqtSignal(float)  # threshold value
-    rag_max_docs_changed = QtCore.pyqtSignal(int)  # max documents per database
     rag_max_chunks_changed = QtCore.pyqtSignal(int)  # max chunks for auto-build
     rag_summary_chunk_size_changed = QtCore.pyqtSignal(
         int
@@ -872,16 +870,12 @@ class PromptsPanel(QtWidgets.QWidget):
 
     def show_rag_settings_dialog(
         self,
-        current_max_docs=3,
-        current_threshold=0.0,
         current_max_chunks=10,
         current_summary_chunk_size=1500,
     ):
         """Show RAG settings dialog with current values.
 
         Args:
-            current_max_docs: Current max documents setting
-            current_threshold: Current similarity threshold setting
             current_max_chunks: Current max chunks setting
             current_summary_chunk_size: Current summarization chunk size
         """
@@ -919,32 +913,6 @@ class PromptsPanel(QtWidgets.QWidget):
         max_chunks_layout.addLayout(max_chunks_input_layout)
         max_chunks_group.setLayout(max_chunks_layout)
 
-        # === Max Documents Section ===
-        max_docs_group = QtWidgets.QGroupBox("Maximum Documents per Retrieval")
-        max_docs_layout = QtWidgets.QVBoxLayout()
-
-        max_docs_desc = QtWidgets.QLabel(
-            "Maximum number of document chunks to retrieve from each database.\n"
-            "Default: 3"
-        )
-        max_docs_desc.setWordWrap(True)
-        max_docs_layout.addWidget(max_docs_desc)
-
-        max_docs_input_layout = QtWidgets.QHBoxLayout()
-        max_docs_label = QtWidgets.QLabel("Max Documents:")
-        max_docs_input_layout.addWidget(max_docs_label)
-
-        max_docs_spinbox = QtWidgets.QSpinBox()
-        max_docs_spinbox.setMinimum(1)
-        max_docs_spinbox.setMaximum(20)
-        max_docs_spinbox.setValue(current_max_docs)
-        max_docs_spinbox.setToolTip("Number of chunks to retrieve per database (1-20)")
-        max_docs_input_layout.addWidget(max_docs_spinbox)
-        max_docs_input_layout.addStretch()
-
-        max_docs_layout.addLayout(max_docs_input_layout)
-        max_docs_group.setLayout(max_docs_layout)
-
         # === Summarization Chunk Size Section ===
         summary_group = QtWidgets.QGroupBox("Summarization Chunk Size")
         summary_layout = QtWidgets.QVBoxLayout()
@@ -975,45 +943,6 @@ class PromptsPanel(QtWidgets.QWidget):
         summary_layout.addLayout(summary_input_layout)
         summary_group.setLayout(summary_layout)
 
-        # === Similarity Threshold Section ===
-        threshold_group = QtWidgets.QGroupBox("Similarity Threshold")
-        threshold_layout = QtWidgets.QVBoxLayout()
-
-        threshold_desc = QtWidgets.QLabel(
-            "Minimum similarity score (0.0 - 1.0) for RAG search results.\n"
-            "Lower values return more results but may be less relevant.\n"
-            "Higher values return fewer but more relevant results.\n"
-            "Default: 0.0 (no filtering)"
-        )
-        threshold_desc.setWordWrap(True)
-        threshold_layout.addWidget(threshold_desc)
-
-        # Slider
-        slider_layout = QtWidgets.QHBoxLayout()
-        slider_label = QtWidgets.QLabel("Threshold:")
-        slider_layout.addWidget(slider_label)
-
-        slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
-        slider.setMinimum(0)
-        slider.setMaximum(100)
-        slider.setValue(int(current_threshold * 100))
-        slider.setTickPosition(QtWidgets.QSlider.TicksBelow)
-        slider.setTickInterval(10)
-        slider_layout.addWidget(slider)
-
-        value_label = QtWidgets.QLabel(f"{current_threshold:.2f}")
-        value_label.setMinimumWidth(40)
-        slider_layout.addWidget(value_label)
-
-        threshold_layout.addLayout(slider_layout)
-        threshold_group.setLayout(threshold_layout)
-
-        # Update label when slider changes
-        def update_label(value):
-            value_label.setText(f"{value / 100:.2f}")
-
-        slider.valueChanged.connect(update_label)
-
         # Buttons
         button_box = QtWidgets.QDialogButtonBox(
             QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel
@@ -1023,26 +952,18 @@ class PromptsPanel(QtWidgets.QWidget):
 
         layout.addWidget(max_chunks_group)
         layout.addWidget(summary_group)
-        layout.addWidget(max_docs_group)
-        layout.addWidget(threshold_group)
         layout.addWidget(button_box)
 
         dialog.setLayout(layout)
 
         # Show dialog
         if dialog.exec_() == QtWidgets.QDialog.Accepted:
-            max_docs = max_docs_spinbox.value()
             max_chunks = max_chunks_spinbox.value()
             summary_chunk_size = summary_spinbox.value()
-            threshold = slider.value() / 100.0
-            print(f"RAG max documents set to: {max_docs}")
             print(f"RAG max chunks set to: {max_chunks}")
             print(f"RAG summary chunk size set to: {summary_chunk_size}")
-            print(f"RAG similarity threshold set to: {threshold}")
-            self.rag_max_docs_changed.emit(max_docs)
             self.rag_max_chunks_changed.emit(max_chunks)
             self.rag_summary_chunk_size_changed.emit(summary_chunk_size)
-            self.rag_similarity_threshold_changed.emit(threshold)
 
     def show_warning(self, title, message):
         """Show warning message box."""

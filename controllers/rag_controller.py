@@ -519,24 +519,29 @@ class RAGController:
             traceback.print_exc()
             self.view.show_warning("Delete Error", f"Failed to delete database:\n{e}")
 
-    def query_databases(self, query, top_k=None):
-        """Query selected databases for relevant context.
+    def query_databases(self, query, max_tokens=None):
+        """Query selected databases for relevant context using dynamic K.
+
+        Uses greedy packing: retrieves chunks sorted by relevance and adds them
+        until the token budget is exhausted (~60-70% of available context).
 
         Args:
             query: Query string
-            top_k: Number of top results per database (defaults to model.max_docs)
+            max_tokens: Maximum tokens to allocate for RAG context (defaults to 2000)
 
         Returns:
             str: Combined context from all selected databases
         """
+        from models.story_model import StoryModel
+
         self._init_components()
 
         if self._embeddings is None:
             return ""
 
-        # Use top_k from model if not explicitly provided
-        if top_k is None:
-            top_k = self.model.max_docs
+        # Default token budget if not specified
+        if max_tokens is None:
+            max_tokens = 2000
 
         selected_dbs = self.model.get_selected_databases()
 
@@ -546,15 +551,15 @@ class RAGController:
         print(f"\n{'=' * 80}")
         print(f"RAG QUERY: {query[:100]}{'...' if len(query) > 100 else ''}")
         print(f"Selected Databases: {', '.join(selected_dbs)}")
-        print(f"Max Documents (total): {top_k}")
-        print(f"Similarity Threshold: {self.model.similarity_threshold}")
+        print(f"Token Budget: {max_tokens:,} tokens")
+        print(f"Adaptive Threshold: Enabled (2.5x best score)")
         print(f"{'=' * 80}")
 
         try:
             all_results = []
 
-            # Distribute total top_k across databases to avoid N-per-DB behavior
-            per_db_k = max(1, int((top_k + len(selected_dbs) - 1) / len(selected_dbs)))
+            # Fetch initial batch (20 per database) to have pool for greedy selection
+            initial_k = 20
 
             # Query each selected database
             for db_name in selected_dbs:
@@ -566,40 +571,12 @@ class RAGController:
                 try:
                     # Query vectorstore with similarity search
                     docs_with_scores = vectorstore.similarity_search_with_score(
-                        query, k=per_db_k
+                        query, k=initial_k
                     )
 
                     if docs_with_scores:
-                        print(f"\n--- Results from '{db_name}' ---")
                         for doc, score in docs_with_scores:
-                            # FAISS with IndexFlatL2 returns L2 (Euclidean) distance
-                            # Lower distance = more similar (0 = perfect match)
-                            # Convert to similarity score for consistent interpretation
-                            # Using formula: similarity = 1 / (1 + distance)
-                            # This gives: perfect match (0) -> 1.0, large distance -> approaches 0
-                            similarity = 1.0 / (1.0 + score)
-
-                            # Apply threshold filtering if enabled
-                            if self.model.similarity_threshold > 0.0:
-                                if similarity < self.model.similarity_threshold:
-                                    print(
-                                        f"  [Filtered] Distance {score:.4f}, Similarity {similarity:.4f} < threshold {self.model.similarity_threshold:.4f}"
-                                    )
-                                    continue
-
                             all_results.append((doc, score))
-
-                            # Log to terminal
-                            source_file = doc.metadata.get("file_name", "unknown")
-                            chunk_idx = doc.metadata.get("chunk_index", "?")
-
-                            print(
-                                f"  [{len(all_results)}] Source: {source_file} (chunk {chunk_idx})"
-                            )
-                            print(f"      Score: {score:.4f}")
-                            print(
-                                f"      Preview: {doc.page_content[:100]}{'...' if len(doc.page_content) > 100 else ''}"
-                            )
 
                 except Exception as e:
                     print(f"Error querying database '{db_name}': {e}")
@@ -610,23 +587,93 @@ class RAGController:
                 print(f"{'=' * 80}\n")
                 return ""
 
-            print(f"\n{'=' * 80}")
-            print(
-                f"✓ Retrieved {len(all_results)} total chunks from {len(selected_dbs)} database(s)"
-            )
-            print(f"{'=' * 80}\n")
-
-            # Sort by score (lower is better for FAISS distance)
+            # Sort by relevance (lower score = more relevant)
             all_results.sort(key=lambda x: x[1])
 
-            # Trim to total top_k
-            if top_k is not None and len(all_results) > top_k:
-                all_results = all_results[:top_k]
+            # Adaptive threshold: filter out chunks significantly worse than best result
+            if all_results:
+                best_score = all_results[0][1]
+                adaptive_threshold = (
+                    best_score * 2.5
+                )  # Keep chunks within 2.5x of best score
+                filtered_results = [
+                    (doc, score)
+                    for doc, score in all_results
+                    if score <= adaptive_threshold
+                ]
 
-            # Combine results - use simple separator without "RAG" label
-            # to avoid LLM incorporating the label into its response
+                if len(filtered_results) < len(all_results):
+                    print(
+                        f"Adaptive filter: kept {len(filtered_results)}/{len(all_results)} chunks (threshold: {adaptive_threshold:.4f})"
+                    )
+
+                all_results = (
+                    filtered_results if filtered_results else all_results[:5]
+                )  # Keep at least top 5
+
+            # Greedy packing: add chunks until token budget exhausted
+            selected_chunks = []
+            total_tokens = 0
+
+            for doc, score in all_results:
+                chunk_tokens = StoryModel.estimate_token_count(doc.page_content)
+
+                # Check if adding this chunk would exceed budget
+                if total_tokens + chunk_tokens > max_tokens:
+                    # Try to fit partial chunk if there's meaningful space left
+                    remaining = max_tokens - total_tokens
+                    if (
+                        remaining > 100
+                    ):  # Only bother if we have room for meaningful content
+                        # Truncate chunk to fit
+                        chars_to_keep = remaining * 4  # ~4 chars per token
+                        truncated_content = doc.page_content[:chars_to_keep] + "..."
+                        selected_chunks.append(
+                            (truncated_content, score, chunk_tokens, True)
+                        )
+                        total_tokens += remaining
+                    break
+
+                selected_chunks.append((doc.page_content, score, chunk_tokens, False))
+                total_tokens += chunk_tokens
+
+            if not selected_chunks:
+                print(f"\n⚠️  No chunks fit within token budget")
+                print(f"{'=' * 80}\n")
+                return ""
+
+            print(f"\n{'=' * 80}")
+            print(
+                f"✓ Selected {len(selected_chunks)} chunks ({total_tokens:,}/{max_tokens:,} tokens)"
+            )
+            print(
+                f"  Dynamic K: packed {len(selected_chunks)} from {len(all_results)} candidates"
+            )
+
+            # Log selected chunks
+            for idx, (content, score, tokens, truncated) in enumerate(
+                selected_chunks, 1
+            ):
+                trunc_marker = " [TRUNCATED]" if truncated else ""
+                source_file = "unknown"
+                chunk_idx = "?"
+                # Try to get metadata from original doc
+                for doc, s in all_results:
+                    if doc.page_content == content or (
+                        truncated and content.startswith(doc.page_content[:50])
+                    ):
+                        source_file = doc.metadata.get("file_name", "unknown")
+                        chunk_idx = doc.metadata.get("chunk_index", "?")
+                        break
+                print(
+                    f"  [{idx}] {source_file} (chunk {chunk_idx}): {tokens:,} tokens, score: {score:.4f}{trunc_marker}"
+                )
+
+            print(f"{'=' * 80}\n")
+
+            # Combine results
             context = "\n\n---\n\n".join(
-                [doc.page_content for doc, score in all_results]
+                [content for content, _, _, _ in selected_chunks]
             )
 
             return context

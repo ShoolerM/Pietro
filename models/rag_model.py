@@ -29,8 +29,6 @@ class RAGModel(Observable):
         self._selected_databases = set()
 
         # RAG query settings - will be loaded from file
-        self.similarity_threshold = 0.0  # Default: no filtering
-        self.max_docs = 3  # Default: retrieve 3 chunks per database
         self.max_chunks = 10  # Default: auto-build chunks
         self.summary_chunk_size = 1500  # Default: max raw tokens for summarization
 
@@ -49,10 +47,6 @@ class RAGModel(Observable):
                     # New format with separate databases and settings keys
                     self._databases = data.get("databases", {})
                     settings = data.get("settings", {})
-                    self.similarity_threshold = settings.get(
-                        "similarity_threshold", 0.0
-                    )
-                    self.max_docs = settings.get("max_docs", 3)
                     self.max_chunks = settings.get("max_chunks", 10)
                     self.summary_chunk_size = settings.get("summary_chunk_size", 1500)
 
@@ -60,8 +54,6 @@ class RAGModel(Observable):
                     if any(
                         key not in settings
                         for key in [
-                            "similarity_threshold",
-                            "max_docs",
                             "max_chunks",
                             "summary_chunk_size",
                         ]
@@ -76,8 +68,6 @@ class RAGModel(Observable):
                     # Migrate to new format
                     print("Detected old database format, migrating...")
                     self._databases = data
-                    self.similarity_threshold = 0.0
-                    self.max_docs = 3
                     self.max_chunks = 10
                     self.summary_chunk_size = 1500
                     # Save in new format immediately
@@ -85,8 +75,8 @@ class RAGModel(Observable):
                     print("Migration complete!")
 
                 print(
-                    f"Loaded RAG settings: threshold={self.similarity_threshold}, "
-                    f"max_docs={self.max_docs}, max_chunks={self.max_chunks}, "
+                    f"Loaded RAG settings: "
+                    f"max_chunks={self.max_chunks}, "
                     f"summary_chunk_size={self.summary_chunk_size}"
                 )
                 if self._selected_databases:
@@ -251,26 +241,6 @@ class RAGModel(Observable):
         self.notify_observers("database_deleted", db_name)
 
         return True, f"Database '{db_name}' deleted"
-
-    def set_similarity_threshold(self, threshold):
-        """Set the similarity threshold for RAG queries.
-
-        Args:
-            threshold: Float between 0.0 and 1.0
-        """
-        self.similarity_threshold = max(0.0, min(1.0, threshold))
-        self._save_data()  # Save settings to persist
-        print(f"RAG similarity threshold set to: {self.similarity_threshold}")
-
-    def set_max_docs(self, max_docs):
-        """Set the maximum number of documents to retrieve per database.
-
-        Args:
-            max_docs: Integer between 1 and 20
-        """
-        self.max_docs = max(1, min(20, max_docs))
-        self._save_data()  # Save settings to persist
-        print(f"RAG max documents set to: {self.max_docs}")
 
     def set_max_chunks(self, max_chunks):
         """Set the maximum number of chunks to generate in auto-build mode.

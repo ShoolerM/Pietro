@@ -118,10 +118,6 @@ class MainController:
         self.view.rag_delete_database_clicked.connect(
             self.rag_controller.delete_database
         )
-        self.view.rag_similarity_threshold_changed.connect(
-            self.rag_model.set_similarity_threshold
-        )
-        self.view.rag_max_docs_changed.connect(self.rag_model.set_max_docs)
         self.view.rag_max_chunks_changed.connect(self.rag_model.set_max_chunks)
         self.view.rag_summary_chunk_size_changed.connect(
             self.rag_model.set_summary_chunk_size
@@ -644,36 +640,41 @@ class MainController:
         # Save to history before appending new content
         self.story_model.save_to_history()
 
-        # Query RAG databases for relevant context
-        rag_context = self.rag_controller.query_databases(user_input)
+        # Calculate dynamic RAG token budget (30% of available context after fixed costs)
+        context_limit = self.settings_model.context_limit
+        user_tokens = self.story_model.estimate_token_count(user_input)
+        supp_tokens = (
+            self.story_model.estimate_token_count(supp_text) if supp_text else 0
+        )
+        notes_tokens = self.story_model.estimate_token_count(notes) if notes else 0
+        system_tokens = (
+            self.story_model.estimate_token_count(system_prompt) if system_prompt else 0
+        )
+        output_reserve = 2000  # Reserve tokens for model output
+
+        fixed_costs = (
+            user_tokens + supp_tokens + notes_tokens + system_tokens + output_reserve
+        )
+        available_for_rag_and_story = context_limit - fixed_costs
+
+        # Allocate 30% for RAG, rest for story
+        max_rag_tokens = int(available_for_rag_and_story * 0.3)
+        max_rag_tokens = max(500, min(max_rag_tokens, 4000))  # Clamp between 500-4000
+
+        # Query RAG databases with dynamic token budget
+        rag_context = self.rag_controller.query_databases(
+            user_input, max_tokens=max_rag_tokens
+        )
         if rag_context:
             rag_tokens = self.story_model.estimate_token_count(rag_context)
-            max_rag_tokens = 600
-
-            # Check if RAG context is too large
-            if rag_tokens > max_rag_tokens:
-                self.view.append_logs(
-                    f"\n⚠️ RAG context too large ({rag_tokens} > {max_rag_tokens} tokens)\n"
-                )
-                if self.settings_model.summarize_prompts:
-                    self.view.append_logs(f"🔄 Condensing RAG context...\n")
-                else:
-                    self.view.append_logs(
-                        f"⚠️ Prompt summarization disabled; not condensing RAG context.\n"
-                    )
-
-                if self.settings_model.summarize_prompts:
-                    rag_context, rag_tokens = self.llm_controller.summarize_rag_context(
-                        rag_context, max_rag_tokens
-                    )
-                    self.view.append_logs(f"  ✓ Reduced to {rag_tokens} tokens\n")
-
             final_query = (
                 final_query
                 + "\n\nRELEVANT CONTEXT FROM KNOWLEDGE BASE:\n"
                 + rag_context
             )
-            self.view.append_logs(f"\n🔍 Including RAG context ({rag_tokens} tokens)\n")
+            self.view.append_logs(
+                f"\n🔍 Including RAG context ({rag_tokens:,}/{max_rag_tokens:,} tokens)\n"
+            )
 
         # Always append supplemental text
         if supp_text:
@@ -1450,23 +1451,27 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
                 f"{state['initial_prompt']}\n\nRecent story content:\n{recent_story}"
             )
 
-        self.view.append_logs("🔍 Querying RAG databases...\n")
-        rag_context = self.rag_controller.query_databases(rag_query)
+        # Calculate dynamic RAG budget for auto-build (25% allocation)
+        context_limit = self.settings_model.context_limit
+        output_reserve = 2000
+        available_for_rag_and_story = (
+            context_limit - supp_tokens - notes_tokens - system_tokens - output_reserve
+        )
+        max_rag_tokens = int(
+            available_for_rag_and_story * 0.25
+        )  # 25% for RAG in auto-build
+        max_rag_tokens = max(500, min(max_rag_tokens, 3000))
+
+        self.view.append_logs(
+            f"🔍 Querying RAG databases (budget: {max_rag_tokens:,} tokens)...\n"
+        )
+        rag_context = self.rag_controller.query_databases(
+            rag_query, max_tokens=max_rag_tokens
+        )
 
         if rag_context:
             rag_tokens = self.story_model.estimate_token_count(rag_context)
-            max_rag_tokens = 600
-
-            if rag_tokens > max_rag_tokens and self.settings_model.summarize_prompts:
-                self.view.append_logs(
-                    f"  ⚠️ RAG context too large ({rag_tokens} > {max_rag_tokens})\n"
-                )
-                self.view.append_logs("  🔄 Condensing RAG context...\n")
-                rag_context, rag_tokens = self.llm_controller.summarize_rag_context(
-                    rag_context, max_rag_tokens
-                )
-
-            self.view.append_logs(f"  ✓ Retrieved {rag_tokens} tokens from RAG\n")
+            self.view.append_logs(f"  ✓ Retrieved {rag_tokens:,} tokens from RAG\n")
             state["last_rag_context"] = rag_context
         else:
             self.view.append_logs(f"  ℹ️ No RAG results\n")
@@ -1675,8 +1680,6 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
         """Handle RAG settings dialog request."""
         # Get current settings from model and show dialog
         self.view.show_rag_settings_dialog(
-            current_max_docs=self.rag_model.max_docs,
-            current_threshold=self.rag_model.similarity_threshold,
             current_max_chunks=self.rag_model.max_chunks,
             current_summary_chunk_size=self.rag_model.summary_chunk_size,
         )
