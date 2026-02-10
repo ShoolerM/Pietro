@@ -1,5 +1,6 @@
 """Planning Mode Dialog for interactive story outline creation."""
 
+import re
 from PyQt5 import QtWidgets, QtCore, QtGui
 
 
@@ -287,8 +288,6 @@ class PlanningModeDialog(QtWidgets.QDialog):
         Returns:
             str: Outline text or empty string if none found
         """
-        import re
-
         lines = self._conversation_markdown.split("\n")
         outline_lines = []
         in_outline = False

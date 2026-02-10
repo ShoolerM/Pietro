@@ -7,13 +7,14 @@ Handles all planning mode logic including:
 """
 
 import threading
-import hashlib
-import re
+import traceback
+import json
 from typing import Optional, Dict, Any, Callable
 from PyQt5 import QtCore
 
-from models.planning_model import PlanningModel, OutlinePlotPoint, StoryOutline
+from models.planning_model import PlanningModel
 from views.planning_mode_dialog import PlanningModeDialog
+from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 
 
 class PlanningController:
@@ -222,8 +223,6 @@ IMPORTANT RULES:
             dialog: Planning dialog for signal emission
         """
         try:
-            from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
-
             # Build messages
             messages = [SystemMessage(content=system_content)]
             for msg in self.planning_model.conversation_history:
@@ -270,7 +269,6 @@ IMPORTANT RULES:
 
         except Exception as e:
             print(f"Error in planning LLM: {e}")
-            import traceback
 
             traceback.print_exc()
             dialog.set_waiting.emit(False)
@@ -330,8 +328,6 @@ IMPORTANT RULES:
         response = structured_llm.invoke(messages)
 
         # Parse JSON
-        import json
-
         result = json.loads(response.content)
 
         # Convert to markdown
