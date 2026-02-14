@@ -593,9 +593,10 @@ class RAGController:
             # Adaptive threshold: filter out chunks significantly worse than best result
             if all_results:
                 best_score = all_results[0][1]
-                adaptive_threshold = (
-                    best_score * 2.5
-                )  # Keep chunks within 2.5x of best score
+                # Use configurable percentage threshold (default 5%)
+                threshold_multiplier = 1 + self.model.score_variance_threshold
+                adaptive_threshold = best_score * threshold_multiplier
+
                 filtered_results = [
                     (doc, score)
                     for doc, score in all_results
@@ -604,12 +605,14 @@ class RAGController:
 
                 if len(filtered_results) < len(all_results):
                     print(
-                        f"Adaptive filter: kept {len(filtered_results)}/{len(all_results)} chunks (threshold: {adaptive_threshold:.4f})"
+                        f"Adaptive filter: kept {len(filtered_results)}/{len(all_results)} chunks "
+                        f"(threshold: {adaptive_threshold:.4f}, variance: {self.model.score_variance_threshold:.1%})"
                     )
 
-                all_results = (
-                    filtered_results if filtered_results else all_results[:5]
-                )  # Keep at least top 5
+                # Always keep at least top 3 results regardless of threshold
+                all_results = filtered_results if filtered_results else all_results[:3]
+                if len(all_results) < 3 and len(all_results) < len(filtered_results):
+                    all_results = all_results[:3]
 
             # Greedy packing: add chunks until token budget exhausted
             selected_chunks = []

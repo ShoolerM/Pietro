@@ -36,6 +36,9 @@ class MainView(QtWidgets.QWidget):
     rag_summary_chunk_size_changed = QtCore.pyqtSignal(
         int
     )  # max raw tokens for summarization
+    rag_score_threshold_changed = QtCore.pyqtSignal(
+        float
+    )  # score variance threshold percentage
     rag_settings_requested = QtCore.pyqtSignal()  # request to show settings dialog
     prompt_selections_changed = QtCore.pyqtSignal(
         list, str
@@ -249,6 +252,9 @@ class MainView(QtWidgets.QWidget):
         self.prompts_panel.rag_summary_chunk_size_changed.connect(
             self.rag_summary_chunk_size_changed.emit
         )
+        self.prompts_panel.rag_score_threshold_changed.connect(
+            self.rag_score_threshold_changed.emit
+        )
         self.prompts_panel.rag_settings_requested.connect(
             self.rag_settings_requested.emit
         )
@@ -422,11 +428,13 @@ class MainView(QtWidgets.QWidget):
         self,
         current_max_chunks=10,
         current_summary_chunk_size=1500,
+        current_score_threshold=5.0,
     ):
         """Show RAG settings dialog with current values."""
         return self.prompts_panel.show_rag_settings_dialog(
             current_max_chunks=current_max_chunks,
             current_summary_chunk_size=current_summary_chunk_size,
+            current_score_threshold=current_score_threshold,
         )
 
     def show_inference_settings_dialog(

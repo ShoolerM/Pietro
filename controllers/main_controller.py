@@ -130,6 +130,9 @@ class MainController:
         self.view.rag_summary_chunk_size_changed.connect(
             self.rag_model.set_summary_chunk_size
         )
+        self.view.rag_score_threshold_changed.connect(
+            self.rag_model.set_score_variance_threshold
+        )
         self.view.rag_settings_requested.connect(self._on_rag_settings_requested)
         self.view.prompt_selections_changed.connect(self._on_prompt_selections_changed)
         self.view.summarization_prompt_requested.connect(
@@ -1715,9 +1718,11 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
     def _on_rag_settings_requested(self):
         """Handle RAG settings dialog request."""
         # Get current settings from model and show dialog
+        current_threshold_percent = self.rag_model.score_variance_threshold * 100.0
         self.view.show_rag_settings_dialog(
             current_max_chunks=self.rag_model.max_chunks,
             current_summary_chunk_size=self.rag_model.summary_chunk_size,
+            current_score_threshold=current_threshold_percent,
         )
 
     def _on_inference_settings_requested(self):

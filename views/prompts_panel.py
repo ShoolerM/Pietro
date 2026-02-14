@@ -124,6 +124,9 @@ class PromptsPanel(QtWidgets.QWidget):
     rag_summary_chunk_size_changed = QtCore.pyqtSignal(
         int
     )  # max raw tokens for summarization
+    rag_score_threshold_changed = QtCore.pyqtSignal(
+        float
+    )  # score variance threshold percentage
     rag_settings_requested = QtCore.pyqtSignal()  # request to show settings dialog
     prompt_selections_changed = QtCore.pyqtSignal(
         list, str
@@ -872,12 +875,14 @@ class PromptsPanel(QtWidgets.QWidget):
         self,
         current_max_chunks=10,
         current_summary_chunk_size=1500,
+        current_score_threshold=5.0,
     ):
         """Show RAG settings dialog with current values.
 
         Args:
             current_max_chunks: Current max chunks setting
             current_summary_chunk_size: Current summarization chunk size
+            current_score_threshold: Current score variance threshold (percentage)
         """
         # Create dialog
         dialog = QtWidgets.QDialog(self)
@@ -943,6 +948,39 @@ class PromptsPanel(QtWidgets.QWidget):
         summary_layout.addLayout(summary_input_layout)
         summary_group.setLayout(summary_layout)
 
+        # === Score Variance Threshold Section ===
+        threshold_group = QtWidgets.QGroupBox("Score Variance Threshold")
+        threshold_layout = QtWidgets.QVBoxLayout()
+
+        threshold_desc = QtWidgets.QLabel(
+            "Filter RAG results based on similarity score variance.\n"
+            "Results varying from the top score by more than this percentage will be excluded.\n"
+            "Top 3 results are always included. Lower values = stricter filtering.\n"
+            "Default: 5%"
+        )
+        threshold_desc.setWordWrap(True)
+        threshold_layout.addWidget(threshold_desc)
+
+        threshold_input_layout = QtWidgets.QHBoxLayout()
+        threshold_label = QtWidgets.QLabel("Variance Threshold:")
+        threshold_input_layout.addWidget(threshold_label)
+
+        threshold_spinbox = QtWidgets.QDoubleSpinBox()
+        threshold_spinbox.setMinimum(5.0)
+        threshold_spinbox.setMaximum(30.0)
+        threshold_spinbox.setSingleStep(1.0)
+        threshold_spinbox.setDecimals(0)
+        threshold_spinbox.setValue(current_score_threshold)
+        threshold_spinbox.setSuffix("%")
+        threshold_spinbox.setToolTip(
+            "Score variance threshold for filtering results (5%-30%)"
+        )
+        threshold_input_layout.addWidget(threshold_spinbox)
+        threshold_input_layout.addStretch()
+
+        threshold_layout.addLayout(threshold_input_layout)
+        threshold_group.setLayout(threshold_layout)
+
         # Buttons
         button_box = QtWidgets.QDialogButtonBox(
             QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel
@@ -952,6 +990,7 @@ class PromptsPanel(QtWidgets.QWidget):
 
         layout.addWidget(max_chunks_group)
         layout.addWidget(summary_group)
+        layout.addWidget(threshold_group)
         layout.addWidget(button_box)
 
         dialog.setLayout(layout)
@@ -960,10 +999,13 @@ class PromptsPanel(QtWidgets.QWidget):
         if dialog.exec_() == QtWidgets.QDialog.Accepted:
             max_chunks = max_chunks_spinbox.value()
             summary_chunk_size = summary_spinbox.value()
+            score_threshold = threshold_spinbox.value()
             print(f"RAG max chunks set to: {max_chunks}")
             print(f"RAG summary chunk size set to: {summary_chunk_size}")
+            print(f"RAG score variance threshold set to: {score_threshold}%")
             self.rag_max_chunks_changed.emit(max_chunks)
             self.rag_summary_chunk_size_changed.emit(summary_chunk_size)
+            self.rag_score_threshold_changed.emit(score_threshold)
 
     def show_warning(self, title, message):
         """Show warning message box."""

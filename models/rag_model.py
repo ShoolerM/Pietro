@@ -31,6 +31,7 @@ class RAGModel(Observable):
         # RAG query settings - will be loaded from file
         self.max_chunks = 10  # Default: auto-build chunks
         self.summary_chunk_size = 1500  # Default: max raw tokens for summarization
+        self.score_variance_threshold = 0.05  # Default: 5% variance from top score
 
         # Load databases and settings
         self._load_data()
@@ -48,6 +49,9 @@ class RAGModel(Observable):
                     self._databases = data.get("databases", {})
                     settings = data.get("settings", {})
                     self.max_chunks = settings.get("max_chunks", 10)
+                    self.score_variance_threshold = settings.get(
+                        "score_variance_threshold", 0.05
+                    )
                     self.summary_chunk_size = settings.get("summary_chunk_size", 1500)
 
                     # Persist missing settings keys for older files
@@ -97,6 +101,7 @@ class RAGModel(Observable):
                     "max_docs": self.max_docs,
                     "max_chunks": self.max_chunks,
                     "summary_chunk_size": self.summary_chunk_size,
+                    "score_variance_threshold": self.score_variance_threshold,
                 },
                 "selected_databases": list(self._selected_databases),
             }
@@ -261,3 +266,20 @@ class RAGModel(Observable):
         self.summary_chunk_size = max(256, min(200000, int(chunk_size)))
         self._save_data()
         print(f"RAG summary chunk size set to: {self.summary_chunk_size}")
+
+    def set_score_variance_threshold(self, percent):
+        """Set the score variance threshold for filtering RAG results.
+
+        Args:
+            percent: Percentage value between 5 and 30 (displayed as 5%-30%)
+        """
+        # Convert percentage to decimal (5% -> 0.05, 30% -> 0.30)
+        decimal_value = percent / 100.0
+        self.score_variance_threshold = max(0.05, min(0.30, decimal_value))
+        self._save_data()
+        print(
+            f"RAG score variance threshold set to: {self.score_variance_threshold:.2%}"
+        )
+        self.notify_observers(
+            "score_variance_threshold_changed", self.score_variance_threshold
+        )
