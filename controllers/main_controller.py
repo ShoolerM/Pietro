@@ -38,7 +38,7 @@ class CondenserSignals(QtCore.QObject):
         str, str, str
     )  # condensed supp_text, system_prompt, notes
     condense_error = QtCore.pyqtSignal(str)  # error_message
-    thinking_update = QtCore.pyqtSignal(str)  # status message for thinking panel
+    thinking_update = QtCore.pyqtSignal(str)  # status message for LLM Panel
 
 
 class MainController:
@@ -113,9 +113,7 @@ class MainController:
         self.view.toggle_summarize_prompts_requested.connect(
             self._on_toggle_summarize_prompts
         )
-        self.view.toggle_build_with_rag_requested.connect(
-            self._on_toggle_build_with_rag
-        )
+        self.view.toggle_smart_mode_requested.connect(self._on_toggle_smart_mode)
         self.view.rag_create_database_clicked.connect(
             self.rag_controller.create_database
         )
@@ -142,7 +140,8 @@ class MainController:
         self.view.general_settings_requested.connect(
             self._on_general_settings_requested
         )
-        self.view.font_size_changed.connect(self._on_font_size_changed)
+        self.view.model_settings_requested.connect(self._on_model_settings_requested)
+        self.view.mode_changed.connect(self._on_mode_changed)
         self.view.inference_settings_requested.connect(
             self._on_inference_settings_requested
         )
@@ -185,7 +184,7 @@ class MainController:
 
         # Sync build with RAG toggle UI
         try:
-            self.view.set_build_with_rag_enabled(self.settings_model.build_with_rag)
+            self.view.set_smart_mode(self.settings_model.smart_mode)
         except Exception:
             pass
 
@@ -216,8 +215,11 @@ class MainController:
                 )
                 signals.notes_ready.emit(generated_notes, notes_tokens)
             except Exception as e:
-                print(f"Error generating notes: {e}")
+                self.view.append_logs(f"Error generating notes: {e}")
                 signals.notes_error.emit(str(e))
+
+        # Start background thread
+        thread = threading.Thread(target=generate_in_thread, daemon=True)
 
         # Start background thread
         thread = threading.Thread(target=generate_in_thread, daemon=True)
@@ -329,7 +331,7 @@ class MainController:
                     condensed_supp, condensed_system, condensed_notes
                 )
             except Exception as e:
-                print(f"Error condensing prompts: {e}")
+                self.view.append_logs(f"Error condensing prompts: {e}")
                 signals.condense_error.emit(str(e))
 
         # Start background thread
@@ -376,10 +378,10 @@ class MainController:
                 self.view.set_summarize_prompts_enabled(data)
             except Exception:
                 pass
-        elif event_type == "build_with_rag_changed":
+        elif event_type == "smart_mode_changed":
             # Update UI to reflect new setting
             try:
-                self.view.set_build_with_rag_enabled(data)
+                self.view.set_smart_mode(data)
             except Exception:
                 pass
         elif event_type == "render_markdown_changed":
@@ -410,6 +412,13 @@ class MainController:
         """Handle LLM model changes."""
         if event_type == "models_fetched":
             self.view.set_models(data, self.settings_model.last_model)
+            # Load profile for the restored last model
+            if self.settings_model.last_model:
+                profile = self.settings_model.get_model_profile(
+                    self.settings_model.last_model, self.settings_model.base_url
+                )
+                if profile:
+                    self._apply_model_profile(profile)
         elif event_type == "model_changed":
             # Model already updated
             pass
@@ -423,8 +432,8 @@ class MainController:
             supp_text: Supplemental prompts text
             system_prompt: System prompt text
         """
-        # Check if Build with RAG mode is enabled
-        if self.settings_model.build_with_rag:
+        # Check if Build with Smart Mode is enabled
+        if self.settings_model.smart_mode:
             # Trigger auto-build story mode with the user's input and context
             self._on_auto_build_story_requested(
                 user_input, notes, supp_text, system_prompt
@@ -485,7 +494,7 @@ class MainController:
         self.llm_model.reset_stop_flag()
         self.view.set_stop_enabled(True)
 
-        # Clear thinking panel
+        # Clear LLM Panel
         self.view.clear_thinking_text()
 
         # Sync markdown content with any user edits
@@ -877,7 +886,7 @@ class MainController:
             summary_file = settings_dir / "story_summary_state.json"
             self.summary_model.save_to_file(str(summary_file))
         except Exception as e:
-            print(f"Warning: Could not save summary state: {e}")
+            self.view.append_logs(f"Warning: Could not save summary state: {e}")
 
     def load_summary_state(self):
         """Load the summary state from disk."""
@@ -887,7 +896,7 @@ class MainController:
             if summary_file.exists():
                 self.summary_model.load_from_file(str(summary_file))
         except Exception as e:
-            print(f"Warning: Could not load summary state: {e}")
+            self.view.append_logs(f"Warning: Could not load summary state: {e}")
 
     def _on_undo(self):
         """Handle undo button click."""
@@ -944,7 +953,9 @@ class MainController:
                 # Save the detected value to profile for future use
                 self._save_current_model_profile()
             except Exception as e:
-                print(f"Warning: Could not auto-detect context window: {e}")
+                self.view.append_logs(
+                    f"Warning: Could not auto-detect context window: {e}"
+                )
                 # Fall back to existing behavior (keep current value)
 
         # Update the LLM model
@@ -991,6 +1002,19 @@ class MainController:
         except Exception:
             pass
 
+    def _on_prompt_selections_changed(self, supplemental_files, system_prompt):
+        """Handle prompt selection changes from the view.
+
+        Args:
+            supplemental_files: List of selected supplemental file paths
+            system_prompt: Selected system prompt file path
+        """
+        try:
+            self.settings_model.set_selected_supplemental_files(supplemental_files)
+            self.settings_model.set_selected_system_prompt(system_prompt)
+        except Exception as e:
+            print(f"Error saving prompt selections: {e}")
+
     def _on_toggle_summarize_prompts(self):
         """Toggle the summarize prompts setting (triggered from UI)."""
         try:
@@ -999,11 +1023,11 @@ class MainController:
         except Exception:
             pass
 
-    def _on_toggle_build_with_rag(self):
+    def _on_toggle_smart_mode(self):
         """Toggle the build with RAG setting (triggered from UI)."""
         try:
-            new_val = not self.settings_model.build_with_rag
-            self.settings_model.build_with_rag = new_val
+            new_val = not self.settings_model.smart_mode
+            self.settings_model.smart_mode = new_val
         except Exception:
             pass
 
@@ -1011,12 +1035,12 @@ class MainController:
         """Handle override selection request.
 
         Args:
-            selected_text: The text that was selected
+            selected_text: The bottom_text that was selected
             start_pos: Start position of selection
             end_pos: End position of selection
         """
-        # Get current user input from control panel
-        user_input = self.view.control_panel.get_user_input().strip()
+        # Get current user input from LLM panel
+        user_input = self.view.llm_panel.get_user_input().strip()
 
         if not user_input:
             self.view.show_warning(
@@ -1184,7 +1208,7 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
         # Clear existing summary
         self.summary_model.clear()
 
-        # Show notification in thinking panel
+        # Show notification in LLM Panel
         self.view.clear_thinking_text()
         self.view.append_thinking_text(f"\n{'=' * 60}\n")
         self.view.append_thinking_text(f"🔄 REGENERATING STORY SUMMARY\n")
@@ -1347,7 +1371,7 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
         self.llm_model.reset_stop_flag()
         self.view.set_stop_enabled(True)
 
-        # Clear thinking panel and provide instructions
+        # Clear LLM Panel and provide instructions
         self.view.clear_thinking_text()
         self.view.append_logs(f"\n{'=' * 60}\n")
         self.view.append_logs("🤖 AUTO STORY BUILD MODE ACTIVATED\n")
@@ -1584,6 +1608,9 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
             f"✍️ Generating {state['paragraphs_per_chunk']} paragraphs...\n\n"
         )
 
+        # Start waiting animation before LLM call
+        self.view.set_waiting(True)
+
         self.llm_controller.generate_story_chunk(
             final_query,
             state["system_prompt"],
@@ -1630,9 +1657,7 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
         if self.llm_model.stop_generation:
             state = self._auto_build_state
             self.view.append_logs(f"\n\n{'=' * 60}\n")
-            self.view.append_logs(
-                f"⏹️ AUTO BUILD STOPPED BY USER (during summarization)\n"
-            )
+            self.view.append_logs(f"⏹️ LD STOPPED BY USER (during summarization)\n")
             self.view.append_logs(f"Generated {state['chunk_count']} chunks.\n")
             self.view.append_logs(f"{'=' * 60}\n")
             self.view.set_stop_enabled(False)
@@ -1693,7 +1718,7 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
         if result["saved"]:
             if result["auto_notes"] is not None:
                 self.settings_model.auto_notes = result["auto_notes"]
-                print(
+                self.view.append_logs(
                     f"✓ Auto Notes: {'enabled' if result['auto_notes'] else 'disabled'}"
                 )
 
@@ -1705,7 +1730,7 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
                 current_story = self.view.get_story_content()
                 if result["render_markdown"] and current_story:
                     self.view.render_story_markdown(self._markdown_content)
-                print(
+                self.view.append_logs(
                     f"✓ Render Markdown: {'enabled' if result['render_markdown'] else 'disabled'}"
                 )
 
@@ -1725,6 +1750,62 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
             current_score_threshold=current_threshold_percent,
         )
 
+    def _on_model_settings_requested(self):
+        """Handle model settings dialog request."""
+        result = self.view.show_model_settings_dialog(
+            current_context_limit=self.settings_model.context_limit
+        )
+
+        if result:
+            self.settings_model.context_limit = result
+            self.view.append_logs(f"✓ Context limit set to: {result} tokens")
+
+    def _on_mode_changed(self, mode):
+        """Handle mode change from bottom control panel."""
+        self.view.append_logs(f"Mode changed to: {mode}")
+
+        # If Smart Mode is selected, enable smart_mode
+        if mode == "Smart Mode":
+            if not self.settings_model.smart_mode:
+                self.settings_model.smart_mode = True
+                self.view.set_smart_mode(True)
+                self.view.append_logs("✓ Smart Mode enabled (build with RAG)")
+        # If Normal mode, disable smart_mode
+        elif mode == "Normal":
+            if self.settings_model.smart_mode:
+                self.settings_model.smart_mode = False
+                self.view.set_smart_mode(False)
+                self.view.append_logs("✓ Normal mode (build with RAG disabled)")
+        # Planning mode is handled by MainView opening the planning dialog
+
+    def _on_model_settings_requested(self):
+        """Handle model settings dialog request."""
+        result = self.view.show_model_settings_dialog(
+            current_context_limit=self.settings_model.context_limit
+        )
+
+        if result:
+            self.settings_model.context_limit = result
+            self.view.append_logs(f"✓ Context limit set to: {result} tokens")
+
+    def _on_mode_changed(self, mode):
+        """Handle mode change from bottom control panel."""
+        self.view.append_logs(f"Mode changed to: {mode}")
+
+        # If Smart Mode is selected, enable smart_mode
+        if mode == "Smart Mode":
+            if not self.settings_model.smart_mode:
+                self.settings_model.smart_mode = True
+                self.view.set_smart_mode(True)
+                self.view.append_logs("✓ Smart Mode enabled (build with RAG)")
+        # If Normal mode, disable smart_mode
+        elif mode == "Normal":
+            if sself.view.append_logsettings_model.smart_mode:
+                self.view.append_logssettings_model.smart_mode = False
+                self.view.set_smart_mode(False)
+                self.view.append_logs("✓ Normal mode (build with RAG disabled)")
+        # Planning mode is handled by MainView opening the planning dialog
+
     def _on_inference_settings_requested(self):
         """Handle inference settings dialog request."""
         # Get current settings from model and show dialog
@@ -1738,7 +1819,7 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
 
             # Test the connection before saving
             test_url = f"http://{ip}:{port}/v1"
-            print(f"Testing connection to: {test_url}")
+            self.view.append_logs(f"Testing connection to: {test_url}")
 
             # Temporarily update the LLM model URL for testing
             old_url = self.llm_model.base_url
@@ -1752,8 +1833,8 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
                 self.settings_model.inference_ip = ip
                 self.settings_model.inference_port = port
                 self.settings_model.save_inference_settings()
-                print(f"✓ Inference server updated to: {ip}:{port}")
-                print(f"  Base URL: {self.settings_model.base_url}")
+                self.view.append_logs(f"✓ Inference server updated to: {ip}:{port}")
+                self.view.append_logs(f"  Base URL: {self.settings_model.base_url}")
 
                 # Ensure LLM model uses updated base URL
                 self.llm_model.base_url = self.settings_model.base_url
@@ -1786,38 +1867,9 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
                     f"• The inference server is running\n"
                     f"• There are no firewall issues",
                 )
-                print(f"✗ Failed to connect to {ip}:{port}: {result_data}")
-
-    def _on_prompt_selections_changed(self, supplemental_files, system_prompt):
-        """Handle prompt selection changes.
-
-        Args:
-            supplemental_files: List of selected supplemental file paths
-            system_prompt: Selected system prompt path (or None)
-        """
-        self.settings_model.save_prompt_selections(supplemental_files, system_prompt)
-
-    def _on_font_size_changed(self, delta):
-        """Handle font size change (Ctrl+Wheel).
-
-        Args:
-            delta: Change in font size (+1 or -1)
-        """
-        new_size = self.settings_model.current_font_size + delta
-        self.settings_model.current_font_size = new_size
-
-    def save_summary_state(self, filepath: str = None) -> bool:
-        """Save current summary state to file.
-
-        Args:
-            filepath: Optional custom filepath. Defaults to settings/current_summary.json
-
-        Returns:
-            bool: True if successful
-        """
-        if filepath is None:
-            from pathlib import Path
-
+                self.view.append_logs(
+                    f"✗ Failed to connect to {ip}:{port}: {result_data}"
+                )
             settings_dir = Path("settings")
             settings_dir.mkdir(exist_ok=True)
             filepath = str(settings_dir / "current_summary.json")

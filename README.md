@@ -32,7 +32,7 @@ An intelligent story writing application that combines **LangChain**, **PyQt5**,
 ### Advanced Features
 - **Model Profiles**: Save per-model configurations (context limits, temperature, system prompts)
 - **Structured Output**: Uses JSON schema for reliable outline generation
-- **Thinking Panel**: View LLM reasoning and generation metadata
+- **LLM Panel**: View LLM reasoning and generation metadata
 - **Token Tracking**: Monitor token usage and context limits in real-time
 - **Font Scaling**: Adjustable UI text size with zoom controls
 
@@ -174,7 +174,7 @@ See `requirements.txt` or `pyproject.toml` for complete list.
 ### RAG Not Finding Documents
 - Verify documents were ingested successfully
 - Check that knowledge base is activated
-- Ensure sufficient `max_docs` setting in RAG model
+- Ensure sufficient `max_docs` setting in Smart Model
 - Try different search queries
 
 ### Memory Issues

@@ -1,0 +1,357 @@
+"""LLM panel view combining thinking process, prompt input, and controls."""
+
+from PyQt5 import QtWidgets, QtCore, QtGui
+from views.search_widget import SearchWidget
+from views.custom_widgets import AutoGrowTextEdit
+
+
+class LLMPanel(QtWidgets.QWidget):
+    """Panel for LLM interaction: thinking process, prompt input, and model controls."""
+
+    # Signals
+    font_size_changed = QtCore.pyqtSignal(int)  # delta
+    send_clicked = QtCore.pyqtSignal()
+    mode_changed = QtCore.pyqtSignal(str)  # "Normal", "Planning", "Smart Mode"
+    model_changed = QtCore.pyqtSignal(str)
+    model_refresh_clicked = QtCore.pyqtSignal()
+
+    def __init__(self):
+        super().__init__()
+        self.search_widget = None
+        self.message_history = []  # Store message history as list of (type, text) tuples
+        self.user_message_history = []  # Store only user messages for navigation
+        self.history_index = (
+            -1
+        )  # Current position in history (-1 = current/new message)
+        self.current_draft = ""  # Store current unsent message when navigating history
+        self._init_ui()
+
+    def _init_ui(self):
+        """Initialize the user interface."""
+        layout = QtWidgets.QVBoxLayout()
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        # Thinking Process section
+        thinking_container = QtWidgets.QWidget()
+        thinking_container_layout = QtWidgets.QVBoxLayout()
+        thinking_container_layout.setContentsMargins(5, 5, 5, 5)
+        thinking_container_layout.setSpacing(5)
+
+        thinking_label = QtWidgets.QLabel("LLM Panel")
+        thinking_container_layout.addWidget(thinking_label)
+
+        self.thinking_text = QtWidgets.QTextEdit()
+        self.thinking_text.setReadOnly(True)
+        self.thinking_text.setAcceptRichText(True)  # Enable rich text for formatting
+        self.thinking_text.setPlaceholderText("Message history will appear here...")
+        self.thinking_text.installEventFilter(self)
+        thinking_container_layout.addWidget(self.thinking_text, stretch=1)
+
+        thinking_container.setLayout(thinking_container_layout)
+
+        # Create search widget
+        self.search_widget = SearchWidget(self.thinking_text, thinking_container)
+        self.search_widget.hide()
+        self.search_widget.close_requested.connect(self.search_widget.hide)
+        thinking_container_layout.insertWidget(0, self.search_widget)
+
+        layout.addWidget(thinking_container, stretch=1)
+
+        # Progress bar (between thinking text and input field)
+        self.wait_progress = QtWidgets.QProgressBar()
+        self.wait_progress.setFixedHeight(12)
+        self.wait_progress.setTextVisible(False)
+        self.wait_progress.setRange(0, 0)  # Indeterminate progress
+        self.wait_progress.hide()
+        layout.addWidget(self.wait_progress)
+
+        # Prompt input section
+        prompt_container = QtWidgets.QWidget()
+        prompt_layout = QtWidgets.QVBoxLayout()
+        prompt_layout.setContentsMargins(5, 5, 5, 5)
+        prompt_layout.setSpacing(0)
+
+        self.input_field = AutoGrowTextEdit(min_lines=2, max_lines=10)
+        self.input_field.setPlaceholderText(
+            "Type your prompt here. Enter to send, Shift+Enter for newline"
+        )
+        self.input_field.send_signal.connect(self._on_send)
+        self.input_field.installEventFilter(self)  # Install event filter for arrow keys
+        prompt_layout.addWidget(self.input_field)
+
+        prompt_container.setLayout(prompt_layout)
+        layout.addWidget(prompt_container, stretch=0)
+
+        # Control bar (no labels, minimal style)
+        control_bar = QtWidgets.QWidget()
+        control_bar.setStyleSheet("background: transparent;")
+        control_layout = QtWidgets.QHBoxLayout()
+        control_layout.setContentsMargins(5, 2, 5, 2)
+        control_layout.setSpacing(5)
+
+        # Mode dropdown (no label)
+        self.mode_combo = QtWidgets.QComboBox()
+        self.mode_combo.addItems(["Normal", "Planning", "Smart Mode"])
+        self.mode_combo.setToolTip(
+            "Normal: Single response mode\n"
+            "Planning: Open planning dialog\n"
+            "Smart Mode: Continuous writing with RAG (N chunks)"
+        )
+        self.mode_combo.currentTextChanged.connect(
+            lambda text: self.mode_changed.emit(text)
+        )
+        control_layout.addWidget(self.mode_combo)
+
+        # Model dropdown (no label)
+        self.model_combo = QtWidgets.QComboBox()
+        self.model_combo.setMinimumWidth(150)
+        self.model_combo.currentTextChanged.connect(
+            lambda text: self.model_changed.emit(text)
+        )
+        control_layout.addWidget(self.model_combo, stretch=1)
+
+        # Refresh button
+        self.model_refresh_button = QtWidgets.QPushButton("↻")
+        self.model_refresh_button.setToolTip("Refresh Models")
+        self.model_refresh_button.setFixedWidth(30)
+        self.model_refresh_button.clicked.connect(
+            lambda: self.model_refresh_clicked.emit()
+        )
+        control_layout.addWidget(self.model_refresh_button)
+
+        control_bar.setLayout(control_layout)
+        layout.addWidget(control_bar, stretch=0)
+
+        self.setLayout(layout)
+
+        # Set size constraints
+        self.setMinimumWidth(250)
+
+        # Add Ctrl+F shortcut for search
+        self.search_shortcut = QtWidgets.QShortcut(QtGui.QKeySequence("Ctrl+F"), self)
+        self.search_shortcut.setContext(QtCore.Qt.WidgetWithChildrenShortcut)
+        self.search_shortcut.activated.connect(self._show_search)
+
+    def _show_search(self):
+        """Show the search widget."""
+        if self.search_widget:
+            self.search_widget.show_and_focus()
+
+    def _on_send(self):
+        """Handle send signal from input field."""
+        # Get the user's message before clearing
+        user_message = self.get_user_input()
+        if user_message:
+            # Add to message history
+            self.add_user_message(user_message)
+            # Reset history navigation
+            self.history_index = -1
+            self.current_draft = ""
+            # Show progress bar immediately
+            self.wait_progress.show()
+        self.send_clicked.emit()
+
+    def _navigate_history_up(self):
+        """Navigate to previous message in history."""
+        if not self.user_message_history:
+            return
+
+        # Save current draft if we're at the bottom
+        if self.history_index == -1:
+            self.current_draft = self.input_field.toPlainText()
+
+        # Move up in history
+        if self.history_index < len(self.user_message_history) - 1:
+            self.history_index += 1
+            # Get message from end of list (most recent first)
+            message = self.user_message_history[-(self.history_index + 1)]
+            self.input_field.setPlainText(message)
+            # Move cursor to end
+            self.input_field.moveCursor(QtGui.QTextCursor.End)
+
+    def _navigate_history_down(self):
+        """Navigate to next (newer) message in history."""
+        if self.history_index <= -1:
+            return
+
+        # Move down in history
+        self.history_index -= 1
+
+        if self.history_index == -1:
+            # Back to current draft
+            self.input_field.setPlainText(self.current_draft)
+        else:
+            # Get message from end of list
+            message = self.user_message_history[-(self.history_index + 1)]
+            self.input_field.setPlainText(message)
+
+        # Move cursor to end
+        self.input_field.moveCursor(QtGui.QTextCursor.End)
+
+    def eventFilter(self, obj, event):
+        """Event filter for font resizing with Ctrl+Wheel and history navigation."""
+        # Handle arrow key navigation in input field
+        if (
+            hasattr(self, "input_field")
+            and obj == self.input_field
+            and event.type() == QtCore.QEvent.KeyPress
+        ):
+            if event.key() == QtCore.Qt.Key_Up:
+                self._navigate_history_up()
+                return True
+            elif event.key() == QtCore.Qt.Key_Down:
+                self._navigate_history_down()
+                return True
+
+        # Handle font resizing in thinking text
+        if obj == self.thinking_text and event.type() == QtCore.QEvent.Wheel:
+            if event.modifiers() & QtCore.Qt.ControlModifier:
+                delta = event.angleDelta().y()
+                if delta > 0:
+                    self.font_size_changed.emit(1)
+                elif delta < 0:
+                    self.font_size_changed.emit(-1)
+                return True
+        return False
+
+    # Public methods
+
+    def append_thinking_text(self, text):
+        """Append text to LLM Panel."""
+        try:
+            self.thinking_text.moveCursor(QtGui.QTextCursor.End)
+            self.thinking_text.insertPlainText(text)
+            self.thinking_text.moveCursor(QtGui.QTextCursor.End)
+        except Exception:
+            pass
+
+    def set_thinking_text(self, text):
+        """Set thinking text."""
+        try:
+            self.thinking_text.setPlainText(text)
+        except Exception:
+            pass
+
+    def clear_thinking_text(self):
+        """Clear thinking text."""
+        try:
+            self.thinking_text.clear()
+        except Exception:
+            pass
+
+    def apply_font_size(self, size):
+        """Apply font size to thinking text."""
+        try:
+            font = self.thinking_text.font()
+            font.setPointSize(size)
+            self.thinking_text.setFont(font)
+        except Exception:
+            pass
+
+    def get_user_input(self):
+        """Get user input text."""
+        return self.input_field.toPlainText().strip()
+
+    def clear_user_input(self):
+        """Clear user input field."""
+        self.input_field.clear()
+
+    def set_models(self, models):
+        """Set available models in the dropdown."""
+        current = self.model_combo.currentText()
+        self.model_combo.blockSignals(True)
+        self.model_combo.clear()
+        self.model_combo.addItems(models)
+        # Restore selection if it exists
+        index = self.model_combo.findText(current)
+        if index >= 0:
+            self.model_combo.setCurrentIndex(index)
+        self.model_combo.blockSignals(False)
+
+    def set_model(self, model_name):
+        """Set the current model."""
+        index = self.model_combo.findText(model_name)
+        if index >= 0:
+            self.model_combo.blockSignals(True)
+            self.model_combo.setCurrentIndex(index)
+            self.model_combo.blockSignals(False)
+
+    def get_current_model(self):
+        """Get currently selected model."""
+        return self.model_combo.currentText()
+
+    def get_current_mode(self):
+        """Get currently selected mode."""
+        return self.mode_combo.currentText()
+
+    def set_waiting(self, waiting):
+        """Show or hide the progress bar.
+
+        Args:
+            waiting: True to show progress bar, False to hide
+        """
+        if waiting:
+            self.wait_progress.show()
+        else:
+            self.wait_progress.hide()
+
+    def set_mode(self, mode):
+        """Set the current mode."""
+        index = self.mode_combo.findText(mode)
+        if index >= 0:
+            self.mode_combo.blockSignals(True)
+            self.mode_combo.setCurrentIndex(index)
+            self.mode_combo.blockSignals(False)
+
+    def add_user_message(self, message):
+        """Add a user message to the history and display it."""
+        self.message_history.append(("user", message))
+        self.user_message_history.append(message)  # Add to navigation history
+        self._render_message_history()
+
+    def add_ai_message(self, message):
+        """Add an AI message to the history and display it."""
+        self.message_history.append(("ai", message))
+        self._render_message_history()
+
+    def clear_message_history(self):
+        """Clear all message history."""
+        self.message_history.clear()
+        self.thinking_text.clear()
+
+    def _render_message_history(self):
+        """Render the message history with formatting."""
+        html_parts = []
+
+        for msg_type, msg_text in self.message_history:
+            if msg_type == "user":
+                # User messages in bold with blue color
+                html_parts.append(
+                    f'<div style="margin-bottom: 10px;">'
+                    f'<span style="color: #4a9eff; font-weight: bold;">User:</span><br>'
+                    f'<span style="margin-left: 10px;">{self._escape_html(msg_text)}</span>'
+                    f"</div>"
+                )
+            elif msg_type == "ai":
+                # AI messages in italic with green color
+                html_parts.append(
+                    f'<div style="margin-bottom: 10px;">'
+                    f'<span style="color: #4eff9e; font-weight: bold;">AI:</span><br>'
+                    f'<span style="margin-left: 10px; font-style: italic;">{self._escape_html(msg_text)}</span>'
+                    f"</div>"
+                )
+
+        self.thinking_text.setHtml("".join(html_parts))
+        # Scroll to bottom
+        self.thinking_text.moveCursor(QtGui.QTextCursor.End)
+
+    def _escape_html(self, text):
+        """Escape HTML special characters and preserve newlines."""
+        text = text.replace("&", "&amp;")
+        text = text.replace("<", "&lt;")
+        text = text.replace(">", "&gt;")
+        text = text.replace('"', "&quot;")
+        text = text.replace("'", "&#39;")
+        text = text.replace("\n", "<br>")
+        return text

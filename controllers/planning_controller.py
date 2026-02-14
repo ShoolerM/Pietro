@@ -39,7 +39,7 @@ class PlanningController:
             settings_model: Settings model
             llm_controller: LLM controller for generation
             rag_controller: RAG controller for context retrieval
-            rag_model: RAG model for configuration
+            rag_model: Smart Model for configuration
             summary_model: Summary model for content compression
             view: Main view for UI interactions
         """

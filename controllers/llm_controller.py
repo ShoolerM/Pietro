@@ -887,7 +887,7 @@ class LLMController:
             max_raw_tokens: Maximum tokens for raw recent content
             max_rolling_summary_tokens: Maximum tokens for rolling summary
             summary_model: SummaryModel instance
-            thinking_callback: Callback for thinking panel updates
+            thinking_callback: Callback for LLM Panel updates
             completed_callback: Callback when complete (story_for_llm, tokens)
             error_callback: Callback for errors
             set_waiting_callback: Callback to set waiting state

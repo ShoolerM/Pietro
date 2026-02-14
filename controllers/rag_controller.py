@@ -46,31 +46,31 @@ class RAGController:
             return
 
         try:
-            print("Initializing RAG components...")
+            self.view.append_logs("Initializing RAG components...")
 
             # Get database path from model
             rag_dir = Path(self.model.rag_dir)
             rag_dir.mkdir(exist_ok=True)
 
-            print(f"  RAG storage: {rag_dir}")
-            print("  Loading embedding model...")
+            self.view.append_logs(f"  RAG storage: {rag_dir}")
+            self.view.append_logs("  Loading embedding model...")
 
             # Initialize embeddings (using a lightweight model)
             self._embeddings = HuggingFaceEmbeddings(
                 model_name="all-MiniLM-L6-v2", model_kwargs={"device": "cpu"}
             )
 
-            print("  ✓ Embedding model loaded")
+            self.view.append_logs("  ✓ Embedding model loaded")
 
             # Initialize text splitter
             self._text_splitter = RecursiveCharacterTextSplitter(
                 chunk_size=1000, chunk_overlap=200, length_function=len
             )
 
-            print("✓ RAG components initialized\n")
+            self.view.append_logs("✓ RAG components initialized\n")
 
         except Exception as e:
-            print(f"❌ Error initializing RAG components: {e}")
+            self.view.append_logs(f"❌ Error initializing RAG components: {e}")
             traceback.print_exc()
             self.view.show_warning(
                 "RAG Error",
@@ -126,7 +126,7 @@ class RAGController:
             return None
 
         except Exception as e:
-            print(f"Error loading vectorstore '{db_name}': {e}")
+            self.view.append_logs(f"Error loading vectorstore '{db_name}': {e}")
             traceback.print_exc()
             return None
 
@@ -168,20 +168,20 @@ class RAGController:
                 return None
 
         except Exception as e:
-            print(f"Error loading document '{file_path}': {e}")
+            self.view.append_logs(f"Error loading document '{file_path}': {e}")
             return None
 
     def _on_rag_model_changed(self, event_type, data):
-        """Handle RAG model changes."""
+        """Handle Smart Model changes."""
         try:
-            print(f"\n🔔 RAG model event: {event_type}")
+            self.view.append_logs(f"\n🔔 Smart Model event: {event_type}")
 
             if event_type == "database_created":
                 self.refresh_databases()
             elif event_type == "file_added":
                 db_name, file_path = data
-                print(f"   Database: {db_name}")
-                print(f"   File: {file_path}")
+                self.view.append_logs(f"   Database: {db_name}")
+                self.view.append_logs(f"   File: {file_path}")
                 self._ingest_file(db_name, file_path)
             elif event_type == "database_deleted":
                 self.refresh_databases()
@@ -191,10 +191,10 @@ class RAGController:
             elif event_type == "selection_changed":
                 self.refresh_databases()
         except Exception as e:
-            print(f"\n❌ EXCEPTION in _on_rag_model_changed:")
-            print(f"   Event type: {event_type}")
-            print(f"   Data: {data}")
-            print(f"   Error: {e}")
+            self.view.append_logs(f"\n❌ EXCEPTION in _on_rag_model_changed:")
+            self.view.append_logs(f"   Event type: {event_type}")
+            self.view.append_logs(f"   Data: {data}")
+            self.view.append_logs(f"   Error: {e}")
             traceback.print_exc()
 
     def _ingest_file(self, db_name, file_path):
@@ -218,7 +218,7 @@ class RAGController:
 
         def log(msg):
             """Helper to log to both console and progress dialog."""
-            print(msg)
+            self.view.append_logs(msg)
             if progress:
                 progress.append_detail(msg)
 
@@ -304,7 +304,7 @@ class RAGController:
             log(f"\n✓ Successfully added {len(chunks)} chunks to '{db_name}'")
             log(f"{'=' * 80}\n")
 
-            # Show success message in thinking panel if visible
+            # Show success message in LLM Panel if visible
             if not progress and self.view.thinking_panel.isVisible():
                 self.view.append_thinking_text(
                     f"✓ Added '{file_name}' to '{db_name}' ({len(chunks)} chunks)\n"
@@ -428,10 +428,10 @@ class RAGController:
                 error_msg = str(e)
                 progress.append_detail(f"  ❌ {error_type}: {error_msg}")
                 # Also log the full traceback to console for debugging
-                print(f"\n{'=' * 80}")
-                print(f"ERROR ingesting {file_name}:")
+                self.view.append_logs(f"\n{'=' * 80}")
+                self.view.append_logs(f"ERROR ingesting {file_name}:")
                 traceback.print_exc()
-                print(f"{'=' * 80}\n")
+                self.view.append_logs(f"{'=' * 80}\n")
                 error_count += 1
 
             progress.set_progress(idx)
@@ -462,13 +462,13 @@ class RAGController:
             db_name: Name of the database
         """
         try:
-            print(f"Toggling database: {db_name}")
+            self.view.append_logs(f"Toggling database: {db_name}")
             self.model.toggle_database_selection(db_name)
-            print(
+            self.view.append_logs(
                 f"  Success - Selected databases: {self.model.get_selected_databases()}"
             )
         except Exception as e:
-            print(f"Error toggling database '{db_name}': {e}")
+            self.view.append_logs(f"Error toggling database '{db_name}': {e}")
             traceback.print_exc()
 
     def delete_database(self, db_name):
@@ -478,17 +478,17 @@ class RAGController:
             db_name: Name of the database to delete
         """
         try:
-            print(f"\n🗑️  Deleting database: {db_name}")
+            self.view.append_logs(f"\n🗑️  Deleting database: {db_name}")
 
             # Delete from model first
             success, message = self.model.delete_database(db_name)
 
             if not success:
-                print(f"  ❌ {message}")
+                self.view.append_logs(f"  ❌ {message}")
                 self.view.show_warning("Delete Failed", message)
                 return
 
-            print(f"  ✓ Removed from database list")
+            self.view.append_logs(f"  ✓ Removed from database list")
 
             # Try to delete the FAISS vectorstore files
             try:
@@ -498,24 +498,26 @@ class RAGController:
 
                 if index_file.exists():
                     index_file.unlink()
-                    print(f"  ✓ Deleted {index_file.name}")
+                    self.view.append_logs(f"  ✓ Deleted {index_file.name}")
 
                 if pkl_file.exists():
                     pkl_file.unlink()
-                    print(f"  ✓ Deleted {pkl_file.name}")
+                    self.view.append_logs(f"  ✓ Deleted {pkl_file.name}")
 
             except Exception as file_error:
-                print(f"  ⚠️  Could not delete vectorstore files: {file_error}")
+                self.view.append_logs(
+                    f"  ⚠️  Could not delete vectorstore files: {file_error}"
+                )
 
             # Remove from cache
             if db_name in self._vectorstores:
                 del self._vectorstores[db_name]
-                print(f"  ✓ Removed from vectorstore cache")
+                self.view.append_logs(f"  ✓ Removed from vectorstore cache")
 
-            print(f"✓ Database '{db_name}' deleted successfully\n")
+            self.view.append_logs(f"✓ Database '{db_name}' deleted successfully\n")
 
         except Exception as e:
-            print(f"❌ Error deleting database '{db_name}': {e}")
+            self.view.append_logs(f"❌ Error deleting database '{db_name}': {e}")
             traceback.print_exc()
             self.view.show_warning("Delete Error", f"Failed to delete database:\n{e}")
 
@@ -548,12 +550,14 @@ class RAGController:
         if not selected_dbs:
             return ""
 
-        print(f"\n{'=' * 80}")
-        print(f"RAG QUERY: {query[:100]}{'...' if len(query) > 100 else ''}")
-        print(f"Selected Databases: {', '.join(selected_dbs)}")
-        print(f"Token Budget: {max_tokens:,} tokens")
-        print(f"Adaptive Threshold: Enabled (2.5x best score)")
-        print(f"{'=' * 80}")
+        self.view.append_logs(f"\n{'=' * 80}")
+        self.view.append_logs(
+            f"RAG QUERY: {query[:100]}{'...' if len(query) > 100 else ''}"
+        )
+        self.view.append_logs(f"Selected Databases: {', '.join(selected_dbs)}")
+        self.view.append_logs(f"Token Budget: {max_tokens:,} tokens")
+        self.view.append_logs(f"Adaptive Threshold: Enabled (2.5x best score)")
+        self.view.append_logs(f"{'=' * 80}")
 
         try:
             all_results = []
@@ -565,7 +569,9 @@ class RAGController:
             for db_name in selected_dbs:
                 vectorstore = self._load_vectorstore(db_name)
                 if not vectorstore:
-                    print(f"  ⚠️  Database '{db_name}' not found or empty")
+                    self.view.append_logs(
+                        f"  ⚠️  Database '{db_name}' not found or empty"
+                    )
                     continue
 
                 try:
@@ -579,12 +585,12 @@ class RAGController:
                             all_results.append((doc, score))
 
                 except Exception as e:
-                    print(f"Error querying database '{db_name}': {e}")
+                    self.view.append_logs(f"Error querying database '{db_name}': {e}")
                     traceback.print_exc()
 
             if not all_results:
-                print(f"\n⚠️  No results found in any database")
-                print(f"{'=' * 80}\n")
+                self.view.append_logs(f"\n⚠️  No results found in any database")
+                self.view.append_logs(f"{'=' * 80}\n")
                 return ""
 
             # Sort by relevance (lower score = more relevant)
@@ -604,7 +610,7 @@ class RAGController:
                 ]
 
                 if len(filtered_results) < len(all_results):
-                    print(
+                    self.view.append_logs(
                         f"Adaptive filter: kept {len(filtered_results)}/{len(all_results)} chunks "
                         f"(threshold: {adaptive_threshold:.4f}, variance: {self.model.score_variance_threshold:.1%})"
                     )
@@ -641,15 +647,15 @@ class RAGController:
                 total_tokens += chunk_tokens
 
             if not selected_chunks:
-                print(f"\n⚠️  No chunks fit within token budget")
-                print(f"{'=' * 80}\n")
+                self.view.append_logs(f"\n⚠️  No chunks fit within token budget")
+                self.view.append_logs(f"{'=' * 80}\n")
                 return ""
 
-            print(f"\n{'=' * 80}")
-            print(
+            self.view.append_logs(f"\n{'=' * 80}")
+            self.view.append_logs(
                 f"✓ Selected {len(selected_chunks)} chunks ({total_tokens:,}/{max_tokens:,} tokens)"
             )
-            print(
+            self.view.append_logs(
                 f"  Dynamic K: packed {len(selected_chunks)} from {len(all_results)} candidates"
             )
 
@@ -668,11 +674,11 @@ class RAGController:
                         source_file = doc.metadata.get("file_name", "unknown")
                         chunk_idx = doc.metadata.get("chunk_index", "?")
                         break
-                print(
+                self.view.append_logs(
                     f"  [{idx}] {source_file} (chunk {chunk_idx}): {tokens:,} tokens, score: {score:.4f}{trunc_marker}"
                 )
 
-            print(f"{'=' * 80}\n")
+            self.view.append_logs(f"{'=' * 80}\n")
 
             # Combine results
             context = "\n\n---\n\n".join(
@@ -682,7 +688,7 @@ class RAGController:
             return context
 
         except Exception as e:
-            print(f"Error querying databases: {e}")
+            self.view.append_logs(f"Error querying databases: {e}")
             traceback.print_exc()
             return ""
 
@@ -773,7 +779,7 @@ class RAGController:
             }
 
         except ImportError:
-            print(
+            self.view.append_logs(
                 "Warning: scikit-learn not available for semantic similarity. Falling back to basic completion."
             )
             # Fallback: simple substring matching
@@ -796,6 +802,8 @@ class RAGController:
                     for task in tasks
                 },
             }
+        except Exception as e:
+            self.view.append_logs(f"Error checking outline completion: {e}")
         except Exception as e:
             print(f"Error checking outline completion: {e}")
             traceback.print_exc()

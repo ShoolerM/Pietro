@@ -33,7 +33,7 @@ class ContextController:
             settings_model: Settings model (for context limits)
             summary_model: Summary model (for rolling summarization)
             rag_controller: RAG controller (for database queries)
-            rag_model: RAG model (for configuration)
+            rag_model: Smart Model (for configuration)
         """
         self.story_model = story_model
         self.settings_model = settings_model

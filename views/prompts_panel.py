@@ -896,7 +896,7 @@ class PromptsPanel(QtWidgets.QWidget):
         max_chunks_layout = QtWidgets.QVBoxLayout()
 
         max_chunks_desc = QtWidgets.QLabel(
-            "Number of chunks to generate during auto-build RAG mode.\nDefault: 10"
+            "Number of chunks to generate during auto-build Smart Mode.\nDefault: 10"
         )
         max_chunks_desc.setWordWrap(True)
         max_chunks_layout.addWidget(max_chunks_desc)

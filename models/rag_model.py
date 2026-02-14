@@ -1,4 +1,4 @@
-"""RAG Model for managing ChromaDB databases and document retrieval."""
+"""Smart Model for managing ChromaDB databases and document retrieval."""
 
 import json
 from pathlib import Path
@@ -14,7 +14,7 @@ class RAGModel(Observable):
     """
 
     def __init__(self, rag_dir="rag_databases"):
-        """Initialize RAG model.
+        """Initialize Smart Model.
 
         Args:
             rag_dir: Directory to store RAG databases
@@ -60,6 +60,7 @@ class RAGModel(Observable):
                         for key in [
                             "max_chunks",
                             "summary_chunk_size",
+                            "score_variance_threshold",
                         ]
                     ):
                         self._save_data()
@@ -81,7 +82,8 @@ class RAGModel(Observable):
                 print(
                     f"Loaded RAG settings: "
                     f"max_chunks={self.max_chunks}, "
-                    f"summary_chunk_size={self.summary_chunk_size}"
+                    f"summary_chunk_size={self.summary_chunk_size}, "
+                    f"score_variance_threshold={self.score_variance_threshold:.1%}"
                 )
                 if self._selected_databases:
                     print(
@@ -97,8 +99,6 @@ class RAGModel(Observable):
             data = {
                 "databases": self._databases,
                 "settings": {
-                    "similarity_threshold": self.similarity_threshold,
-                    "max_docs": self.max_docs,
                     "max_chunks": self.max_chunks,
                     "summary_chunk_size": self.summary_chunk_size,
                     "score_variance_threshold": self.score_variance_threshold,

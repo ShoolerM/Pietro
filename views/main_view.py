@@ -2,10 +2,9 @@
 
 from PyQt5 import QtWidgets, QtCore
 
-from views.thinking_panel import ThinkingPanel
 from views.story_panel import StoryPanel
 from views.prompts_panel import PromptsPanel
-from views.control_panel import ControlPanel
+from views.llm_panel import LLMPanel
 
 
 class MainView(QtWidgets.QWidget):
@@ -52,6 +51,10 @@ class MainView(QtWidgets.QWidget):
     general_settings_requested = (
         QtCore.pyqtSignal()
     )  # request to show general settings dialog
+    model_settings_requested = (
+        QtCore.pyqtSignal()
+    )  # request to show model settings dialog
+    mode_changed = QtCore.pyqtSignal(str)  # mode changed in bottom control panel
     file_saved = QtCore.pyqtSignal(str, str)
     font_size_changed = QtCore.pyqtSignal(int)
     inference_settings_requested = (
@@ -63,7 +66,7 @@ class MainView(QtWidgets.QWidget):
     toggle_summarize_prompts_requested = (
         QtCore.pyqtSignal()
     )  # forwarded from story panel
-    toggle_build_with_rag_requested = QtCore.pyqtSignal()  # forwarded from story panel
+    toggle_smart_mode_requested = QtCore.pyqtSignal()  # forwarded from story panel
     auto_build_story_requested = (
         QtCore.pyqtSignal()
     )  # request to automatically build complete story
@@ -84,10 +87,9 @@ class MainView(QtWidgets.QWidget):
         self.setWindowTitle("Chat UI")
 
         # Create panels
-        self.thinking_panel = ThinkingPanel()
         self.story_panel = StoryPanel()
         self.prompts_panel = PromptsPanel()
-        self.control_panel = ControlPanel()
+        self.llm_panel = LLMPanel()
 
         self._init_ui()
         self._connect_signals()
@@ -137,37 +139,37 @@ class MainView(QtWidgets.QWidget):
         general_settings_action.triggered.connect(
             lambda: self.general_settings_requested.emit()
         )
+        model_settings_action = settings_menu.addAction("Model Settings...")
+        model_settings_action.triggered.connect(
+            lambda: self.model_settings_requested.emit()
+        )
 
-        # Main vertical splitter - story panel on top, prompts on bottom
-        main_vertical_splitter = QtWidgets.QSplitter(QtCore.Qt.Vertical)
+        # IDE-style layout:
+        # Left side: Story (top) | Prompts (bottom) - vertical split
+        # Right side: LLM Panel - extending full height
 
-        # Top container: story panel + control panel
-        top_container = QtWidgets.QWidget()
-        top_layout = QtWidgets.QVBoxLayout()
-        top_layout.setContentsMargins(0, 0, 0, 0)
-        top_layout.addWidget(
-            self.story_panel, stretch=1
-        )  # Give story panel stretch factor to fill space
-        top_layout.addWidget(
-            self.control_panel, stretch=0
-        )  # Control panel stays at fixed size at bottom
-        top_container.setLayout(top_layout)
+        # Left vertical splitter: Story | Prompts
+        left_vertical_splitter = QtWidgets.QSplitter(QtCore.Qt.Vertical)
+        left_vertical_splitter.addWidget(self.story_panel)
+        left_vertical_splitter.addWidget(self.prompts_panel)
+        left_vertical_splitter.setSizes([500, 300])
 
-        main_vertical_splitter.addWidget(top_container)
-        main_vertical_splitter.addWidget(self.prompts_panel)
-        main_vertical_splitter.setSizes([400, 200])
+        # Main horizontal splitter: Left split (story + prompts) | LLM Panel (right)
+        main_horizontal_splitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
+        main_horizontal_splitter.addWidget(left_vertical_splitter)
+        main_horizontal_splitter.addWidget(self.llm_panel)
+        main_horizontal_splitter.setSizes([850, 150])  # LLM panel at ~15%
 
-        # Main horizontal layout with thinking panel on left
-        main_hbox = QtWidgets.QHBoxLayout()
-        main_hbox.addWidget(self.thinking_panel)
-        main_hbox.addWidget(main_vertical_splitter, stretch=1)
-
+        # Main layout
+        main_layout = QtWidgets.QVBoxLayout()
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.addWidget(main_horizontal_splitter, stretch=1)
         # Create main widget and layout
         central_widget = QtWidgets.QWidget()
         central_layout = QtWidgets.QVBoxLayout()
         central_layout.setContentsMargins(0, 0, 0, 0)
         central_layout.setMenuBar(menu_bar)
-        central_layout.addLayout(main_hbox)
+        central_layout.addLayout(main_layout)
         central_widget.setLayout(central_layout)
 
         # Set central widget with wrapper layout
@@ -188,8 +190,8 @@ class MainView(QtWidgets.QWidget):
         self.story_panel.toggle_summarize_prompts_requested.connect(
             self.toggle_summarize_prompts_requested.emit
         )
-        self.story_panel.toggle_build_with_rag_requested.connect(
-            self.toggle_build_with_rag_requested.emit
+        self.story_panel.toggle_smart_mode_requested.connect(
+            self.toggle_smart_mode_requested.emit
         )
         self.story_panel.auto_build_story_requested.connect(
             self.auto_build_story_requested.emit
@@ -203,22 +205,18 @@ class MainView(QtWidgets.QWidget):
         self.story_panel.update_accepted.connect(self.update_accepted.emit)
         self.story_panel.update_rejected.connect(self.update_rejected.emit)
 
-        # Thinking panel signals
-        self.thinking_panel.font_size_changed.connect(self.font_size_changed.emit)
+        # New story panel shortcuts
+        self.story_panel.send_requested.connect(self._on_send)
+        self.story_panel.undo_requested.connect(self.undo_clicked.emit)
+        self.story_panel.stop_requested.connect(self.stop_clicked.emit)
+        self.story_panel.clear_requested.connect(self.clear_clicked.emit)
 
-        # Control panel signals
-        self.control_panel.send_clicked.connect(self._on_send)
-        self.control_panel.undo_clicked.connect(self.undo_clicked.emit)
-        self.control_panel.clear_clicked.connect(self.clear_clicked.emit)
-        self.control_panel.stop_clicked.connect(self.stop_clicked.emit)
-        self.control_panel.model_refresh_clicked.connect(
-            self.model_refresh_clicked.emit
-        )
-        self.control_panel.model_changed.connect(self.model_changed.emit)
-        self.control_panel.context_limit_changed.connect(
-            self.context_limit_changed.emit
-        )
-        self.control_panel.font_size_changed.connect(self.font_size_changed.emit)
+        # LLM panel signals
+        self.llm_panel.font_size_changed.connect(self.font_size_changed.emit)
+        self.llm_panel.send_clicked.connect(self._on_send)
+        self.llm_panel.model_refresh_clicked.connect(self.model_refresh_clicked.emit)
+        self.llm_panel.model_changed.connect(self.model_changed.emit)
+        self.llm_panel.mode_changed.connect(self._on_mode_changed)
 
         # Prompts panel signals
         self.prompts_panel.supplemental_refresh_clicked.connect(
@@ -264,23 +262,34 @@ class MainView(QtWidgets.QWidget):
         self.prompts_panel.font_size_changed.connect(self.font_size_changed.emit)
 
     def _toggle_thinking_panel(self):
-        """Toggle visibility of the thinking panel."""
-        if self.thinking_panel.isVisible():
-            self.thinking_panel.hide()
+        """Toggle visibility of the LLM panel."""
+        if self.llm_panel.isVisible():
+            self.llm_panel.hide()
             self.story_panel.set_thinking_visible(False)
         else:
-            self.thinking_panel.show()
+            self.llm_panel.show()
             self.story_panel.set_thinking_visible(True)
+
+    def _on_mode_changed(self, mode):
+        """Handle mode change from bottom control panel."""
+        self.mode_changed.emit(mode)
+
+        # If Planning mode is selected, open planning dialog
+        if mode == "Planning":
+            self.planning_mode_requested.emit()
 
     def _on_send(self):
         """Handle send button click - gather data from all panels."""
-        user_input = self.control_panel.get_user_input().strip()
+        user_input = self.llm_panel.get_user_input().strip()
         if not user_input:
             return
 
         notes = self.prompts_panel.get_notes_text().strip()
         supp_text = self.prompts_panel.gather_supplemental_text()
         system_prompt = self.prompts_panel.get_system_prompt_text()
+
+        # Clear the input field after getting the text (message already added to history by LLMPanel)
+        self.llm_panel.clear_user_input()
 
         self.send_clicked.emit(user_input, notes, supp_text, system_prompt)
 
@@ -307,16 +316,28 @@ class MainView(QtWidgets.QWidget):
         self.story_panel.clear_story_content()
 
     def append_thinking_text(self, text):
-        """Append text to thinking panel."""
-        self.thinking_panel.append_thinking_text(text)
+        """Append text to LLM Panel."""
+        self.llm_panel.append_thinking_text(text)
 
     def clear_thinking_text(self):
-        """Clear thinking panel."""
-        self.thinking_panel.clear_thinking_text()
+        """Clear LLM Panel."""
+        self.llm_panel.clear_thinking_text()
+
+    def add_user_message_to_llm_panel(self, message):
+        """Add a user message to the LLM panel history."""
+        self.llm_panel.add_user_message(message)
+
+    def add_ai_message_to_llm_panel(self, message):
+        """Add an AI message to the LLM panel history."""
+        self.llm_panel.add_ai_message(message)
+
+    def clear_llm_message_history(self):
+        """Clear LLM panel message history."""
+        self.llm_panel.clear_message_history()
 
     def append_logs(self, text):
         """Append text to logs panel."""
-        self.prompts_panel.append_logs(text)
+        self.prompts_panel.append_logs(text + "\n")
 
     def clear_logs(self):
         """Clear logs panel."""
@@ -324,7 +345,12 @@ class MainView(QtWidgets.QWidget):
 
     def set_waiting(self, waiting):
         """Set waiting state (show/hide progress bar, enable/disable input)."""
-        self.control_panel.set_waiting(waiting)
+        self.llm_panel.set_waiting(waiting)
+
+    def set_stop_enabled(self, enabled):
+        """Enable or disable the stop button (no-op now that buttons are in context menu)."""
+        # Stop is now available via Escape key shortcut, no button to enable/disable
+        pass
 
     def set_summarize_prompts_enabled(self, enabled: bool):
         """Update the StoryPanel UI state for summarization toggle."""
@@ -333,28 +359,23 @@ class MainView(QtWidgets.QWidget):
         except Exception:
             pass
 
-    def set_build_with_rag_enabled(self, enabled: bool):
+    def set_smart_mode(self, enabled: bool):
         """Update the StoryPanel UI state for build with RAG toggle."""
         try:
-            self.story_panel.set_build_with_rag_enabled(enabled)
+            self.story_panel.set_smart_mode(enabled)
         except Exception:
             pass
 
-    def set_stop_enabled(self, enabled):
-        """Enable or disable the stop button."""
-        self.control_panel.set_stop_enabled(enabled)
-
     def set_context_limit(self, value):
-        """Set the context limit in the control panel."""
-        self.control_panel.set_context_limit(value)
+        """Set the context limit (stored in settings, no UI widget now)."""
+        # Context limit is now in model settings dialog, no direct UI widget
+        pass
 
     def set_models(self, models, selected_model=None):
         """Set available models in dropdown."""
-        self.control_panel.set_models(models, selected_model)
-
-    def set_model_error(self, error_message):
-        """Set error message in model dropdown."""
-        self.control_panel.set_model_error(error_message)
+        self.llm_panel.set_models(models)
+        if selected_model:
+            self.llm_panel.set_model(selected_model)
 
     def load_supplemental_files(self, files, selected_files=None):
         """Load supplemental files into tree widget."""
@@ -420,9 +441,8 @@ class MainView(QtWidgets.QWidget):
     def apply_font_size(self, size):
         """Apply font size to all text widgets."""
         self.story_panel.apply_font_size(size)
-        self.thinking_panel.apply_font_size(size)
+        self.llm_panel.apply_font_size(size)
         self.prompts_panel.apply_font_size(size)
-        self.control_panel.apply_font_size(size)
 
     def show_rag_settings_dialog(
         self,
@@ -510,6 +530,54 @@ class MainView(QtWidgets.QWidget):
             ip = ip_input.text().strip()
             port = port_input.value()
             return (ip, port)
+
+        return None
+
+    def show_model_settings_dialog(self, current_context_limit=4096):
+        """Show model settings dialog for context limit."""
+        dialog = QtWidgets.QDialog(self)
+        dialog.setWindowTitle("Model Settings")
+        dialog.setMinimumWidth(400)
+
+        layout = QtWidgets.QVBoxLayout()
+
+        # Description
+        desc_label = QtWidgets.QLabel(
+            "Configure model-related settings.\n"
+            "Context Limit: Maximum context size. Story will be auto-summarized if it exceeds this limit."
+        )
+        desc_label.setWordWrap(True)
+        layout.addWidget(desc_label)
+
+        # Context Limit
+        context_layout = QtWidgets.QHBoxLayout()
+        context_label = QtWidgets.QLabel("Context Limit:")
+        context_label.setMinimumWidth(100)
+        context_layout.addWidget(context_label)
+
+        context_spinbox = QtWidgets.QSpinBox()
+        context_spinbox.setMinimum(1024)
+        context_spinbox.setMaximum(1000000)
+        context_spinbox.setValue(current_context_limit)
+        context_spinbox.setSingleStep(1024)
+        context_spinbox.setSuffix(" tokens")
+        context_layout.addWidget(context_spinbox)
+        context_layout.addStretch()
+        layout.addLayout(context_layout)
+
+        # Buttons
+        button_box = QtWidgets.QDialogButtonBox(
+            QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel
+        )
+        button_box.accepted.connect(dialog.accept)
+        button_box.rejected.connect(dialog.reject)
+        layout.addWidget(button_box)
+
+        dialog.setLayout(layout)
+
+        # Show dialog
+        if dialog.exec_() == QtWidgets.QDialog.Accepted:
+            return context_spinbox.value()
 
         return None
 
