@@ -306,7 +306,7 @@ class RAGController:
 
             # Show success message in LLM Panel if visible
             if not progress and self.view.thinking_panel.isVisible():
-                self.view.append_thinking_text(
+                self.view.append_logs(
                     f"✓ Added '{file_name}' to '{db_name}' ({len(chunks)} chunks)\n"
                 )
 

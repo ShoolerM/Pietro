@@ -650,7 +650,7 @@ IMPORTANT RULES:
             state["system_prompt"],
             state["paragraphs_per_chunk"],
             self.view.append_story_content,
-            self.view.append_thinking_text,
+            self.view.append_logs,
             lambda: self._on_chunk_complete(),
             self.view.set_waiting,
             self.view.set_stop_enabled,
@@ -822,9 +822,7 @@ IMPORTANT RULES:
         Args:
             error_msg: Error message
         """
-        self.view.append_thinking_text(
-            f"\n❌ Error during planning build: {error_msg}\n"
-        )
-        self.view.append_thinking_text("Planning build stopped.\n")
+        self.view.append_logs(f"\n❌ Error during planning build: {error_msg}\n")
+        self.view.append_logs("Planning build stopped.\n")
         self.view.set_stop_enabled(False)
         self.planning_model.is_active = False

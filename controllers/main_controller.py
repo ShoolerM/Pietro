@@ -302,30 +302,28 @@ class MainController:
                 # Condense supplemental prompts if needed
                 if ctx["supp_tokens"] > ctx["max_supp_tokens"] and condensed_supp:
                     signals.thinking_update.emit(
-                        f"📎 Condensing supplemental prompts...\n"
+                        "📎 Condensing supplemental prompts...\n"
                     )
                     condensed_supp, _ = self.llm_controller.summarize_supplemental(
                         condensed_supp, ctx["max_supp_tokens"]
                     )
-                    signals.thinking_update.emit(
-                        f"  ✓ Supplemental prompts condensed\n"
-                    )
+                    signals.thinking_update.emit("  ✓ Supplemental prompts condensed\n")
 
                 # Condense system prompt if needed
                 if ctx["system_tokens"] > ctx["max_system_tokens"] and condensed_system:
-                    signals.thinking_update.emit(f"🔧 Condensing system prompt...\n")
+                    signals.thinking_update.emit("🔧 Condensing system prompt...\n")
                     condensed_system, _ = self.llm_controller.summarize_system_prompt(
                         condensed_system, ctx["max_system_tokens"]
                     )
-                    signals.thinking_update.emit(f"  ✓ System prompt condensed\n")
+                    signals.thinking_update.emit("  ✓ System prompt condensed\n")
 
                 # Condense notes if needed
                 if ctx["notes_tokens"] > ctx["max_notes_tokens"] and condensed_notes:
-                    signals.thinking_update.emit(f"📝 Condensing notes...\n")
+                    signals.thinking_update.emit("📝 Condensing notes...\n")
                     condensed_notes, _ = self.llm_controller.summarize_supplemental(
                         condensed_notes, ctx["max_notes_tokens"]
                     )
-                    signals.thinking_update.emit(f"  ✓ Notes condensed\n\n")
+                    signals.thinking_update.emit("  ✓ Notes condensed\n\n")
 
                 signals.condense_ready.emit(
                     condensed_supp, condensed_system, condensed_notes
@@ -543,9 +541,7 @@ class MainController:
 
         if needs_condensing:
             if self.settings_model.summarize_prompts:
-                self.view.append_logs(
-                    f"🔄 Condensing oversized context elements...\n\n"
-                )
+                self.view.append_logs("🔄 Condensing oversized context elements...\n\n")
                 self.view.set_waiting(True)
 
                 # Store context for continuation after condensing
@@ -568,7 +564,7 @@ class MainController:
             else:
                 # Summarization disabled - inform the user we're skipping condensing
                 self.view.append_logs(
-                    f"⚠️ Prompt summarization disabled; skipping condensing of oversized prompts.\n"
+                    "⚠️ Prompt summarization disabled; skipping condensing of oversized prompts.\n"
                 )
 
         fixed_costs = (
@@ -598,7 +594,7 @@ class MainController:
 
         if needs_chunking:
             self.view.append_logs(f"\n{'=' * 60}\n")
-            self.view.append_logs(f"📊 HIERARCHICAL SUMMARIZATION ACTIVE\n")
+            self.view.append_logs("📊 HIERARCHICAL SUMMARIZATION ACTIVE\n")
             self.view.append_logs(
                 f"Story tokens: {story_tokens} | Context limit: {context_limit}\n"
             )
@@ -655,7 +651,7 @@ class MainController:
 
 """
             final_query = outline_context + final_query
-            self.view.append_logs(f"\n📋 Using planning outline as context\n")
+            self.view.append_logs("\n📋 Using planning outline as context\n")
 
         # Save to history before appending new content
         self.story_model.save_to_history()
@@ -790,7 +786,7 @@ class MainController:
                 self.view.append_logs(
                     f"\n⚠️ RAG context too large ({rag_tokens} > {max_rag_tokens} tokens)\n"
                 )
-                self.view.append_logs(f"🔄 Condensing RAG context...\n")
+                self.view.append_logs("🔄 Condensing RAG context...\n")
 
                 rag_context, rag_tokens = self.llm_controller.summarize_rag_context(
                     rag_context, max_rag_tokens
@@ -850,7 +846,7 @@ class MainController:
         self.view.append_thinking_text(
             f"\n❌ Chunking/summarization error: {error_message}\n"
         )
-        self.view.append_thinking_text(f"Falling back to recent content only...\n\n")
+        self.view.append_thinking_text("Falling back to recent content only...\n\n")
 
         # Get recent content as fallback
         if not hasattr(self, "_pending_send_context"):
@@ -1116,7 +1112,7 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
         )
 
         # Build query with surrounding context and RAG
-        query = f"""Rewrite the following text according to the instruction."""
+        query = "Rewrite the following text according to the instruction."
 
         # Add context before if available
         if context["context_before"]:
@@ -1211,8 +1207,8 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
         # Show notification in LLM Panel
         self.view.clear_thinking_text()
         self.view.append_thinking_text(f"\n{'=' * 60}\n")
-        self.view.append_thinking_text(f"🔄 REGENERATING STORY SUMMARY\n")
-        self.view.append_thinking_text(f"Processing entire story from scratch...\n")
+        self.view.append_thinking_text("🔄 REGENERATING STORY SUMMARY\n")
+        self.view.append_thinking_text("Processing entire story from scratch...\n")
         self.view.append_thinking_text(f"{'=' * 60}\n\n")
 
         # Calculate context budget
@@ -1250,9 +1246,9 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
 
         # Process in background thread
         def on_complete(story_for_llm, tokens):
-            self.view.append_thinking_text(f"\n✅ Summary regeneration complete!\n")
+            self.view.append_thinking_text("\n✅ Summary regeneration complete!\n")
             self.view.append_thinking_text(
-                f"Summary will be used for next generation.\n"
+                "Summary will be used for next generation.\n"
             )
             self.view.set_waiting(False)
 
@@ -1537,7 +1533,7 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
             self.view.append_logs(f"  ✓ Retrieved {rag_tokens:,} tokens from RAG\n")
             state["last_rag_context"] = rag_context
         else:
-            self.view.append_logs(f"  ℹ️ No RAG results\n")
+            self.view.append_logs("  ℹ️ No RAG results\n")
             state["last_rag_context"] = None
 
         # Check if we need to summarize story
@@ -1551,7 +1547,7 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
         if story_tokens > max_raw_tokens and current_story:
             self.view.append_logs(f"\n📊 Story getting large ({story_tokens} tokens)\n")
             self.view.append_logs(
-                f"🔄 Running summarization to compress older content...\n\n"
+                "🔄 Running summarization to compress older content...\n\n"
             )
 
             # Store context and run summarization, then continue in callback
@@ -1629,7 +1625,7 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
         # Check if user requested stop
         if self.llm_model.stop_generation:
             self.view.append_thinking_text(f"\n\n{'=' * 60}\n")
-            self.view.append_thinking_text(f"⏹️ AUTO BUILD STOPPED BY USER\n")
+            self.view.append_thinking_text("⏹️ AUTO BUILD STOPPED BY USER\n")
             self.view.append_thinking_text(
                 f"Generated {state['chunk_count']} chunks.\n"
             )
@@ -1657,7 +1653,7 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
         if self.llm_model.stop_generation:
             state = self._auto_build_state
             self.view.append_logs(f"\n\n{'=' * 60}\n")
-            self.view.append_logs(f"⏹️ LD STOPPED BY USER (during summarization)\n")
+            self.view.append_logs("⏹️ LD STOPPED BY USER (during summarization)\n")
             self.view.append_logs(f"Generated {state['chunk_count']} chunks.\n")
             self.view.append_logs(f"{'=' * 60}\n")
             self.view.set_stop_enabled(False)
@@ -1667,15 +1663,15 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
             return
 
         self.view.append_logs(f"\n✅ Summarization complete ({tokens} tokens)\n")
-        self.view.append_logs(f"Continuing with chunk generation...\n\n")
+        self.view.append_logs("Continuing with chunk generation...\n\n")
 
         # Continue with chunk generation
         self._execute_chunk_generation(story_for_llm)
 
     def _on_auto_build_error(self, error_msg):
         """Handle errors during auto-build mode."""
-        self.view.append_thinking_text(f"\n❌ Error during auto-build: {error_msg}\n")
-        self.view.append_thinking_text(f"Auto-build stopped.\n")
+        self.view.append_logs(f"\n❌ Error during auto-build: {error_msg}\n")
+        self.view.append_logs("Auto-build stopped.\n")
         self.view.set_stop_enabled(False)
 
     def _on_summarization_prompt_requested(self):
@@ -1800,8 +1796,8 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
                 self.view.append_logs("✓ Smart Mode enabled (build with RAG)")
         # If Normal mode, disable smart_mode
         elif mode == "Normal":
-            if sself.view.append_logsettings_model.smart_mode:
-                self.view.append_logssettings_model.smart_mode = False
+            if self.settings_model.smart_mode:
+                self.settings_model.smart_mode = False
                 self.view.set_smart_mode(False)
                 self.view.append_logs("✓ Normal mode (build with RAG disabled)")
         # Planning mode is handled by MainView opening the planning dialog
@@ -1875,22 +1871,6 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
             filepath = str(settings_dir / "current_summary.json")
 
         return self.summary_model.save_to_file(filepath)
-
-    def load_summary_state(self, filepath: str = None) -> bool:
-        """Load summary state from file.
-
-        Args:
-            filepath: Optional custom filepath. Defaults to settings/current_summary.json
-
-        Returns:
-            bool: True if successful
-        """
-        if filepath is None:
-            from pathlib import Path
-
-            filepath = str(Path("settings") / "current_summary.json")
-
-        return self.summary_model.load_from_file(filepath)
 
     def show(self):
         """Show the main view."""

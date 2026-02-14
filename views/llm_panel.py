@@ -217,7 +217,7 @@ class LLMPanel(QtWidgets.QWidget):
 
     # Public methods
 
-    def append_thinking_text(self, text):
+    def append_logs(self, text):
         """Append text to LLM Panel."""
         try:
             self.thinking_text.moveCursor(QtGui.QTextCursor.End)

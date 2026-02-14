@@ -315,9 +315,9 @@ class MainView(QtWidgets.QWidget):
         """Clear story content."""
         self.story_panel.clear_story_content()
 
-    def append_thinking_text(self, text):
+    def append_logs(self, text):
         """Append text to LLM Panel."""
-        self.llm_panel.append_thinking_text(text)
+        self.llm_panel.append_logs(text)
 
     def clear_thinking_text(self):
         """Clear LLM Panel."""
