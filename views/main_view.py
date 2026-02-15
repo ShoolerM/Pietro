@@ -77,9 +77,6 @@ class MainView(QtWidgets.QWidget):
         str, int, int, str
     )  # selected_text, start_pos, end_pos, prompt
     update_accepted = QtCore.pyqtSignal()  # user accepted the update
-    planning_mode_requested = (
-        QtCore.pyqtSignal()
-    )  # request to open planning mode dialog
     update_rejected = QtCore.pyqtSignal()  # user rejected the update
 
     def __init__(self):
@@ -99,11 +96,6 @@ class MainView(QtWidgets.QWidget):
         # Create menu bar
         menu_bar = QtWidgets.QMenuBar()
         file_menu = menu_bar.addMenu("File")
-        planning_mode_action = file_menu.addAction("Planning Mode...")
-        planning_mode_action.triggered.connect(
-            lambda: self.planning_mode_requested.emit()
-        )
-        file_menu.addSeparator()
         load_action = file_menu.addAction("Load...")
         load_action.setShortcut("Ctrl+O")
         load_action.triggered.connect(lambda: self.story_panel.load_story_file())
@@ -274,10 +266,6 @@ class MainView(QtWidgets.QWidget):
         """Handle mode change from bottom control panel."""
         self.mode_changed.emit(mode)
 
-        # If Planning mode is selected, open planning dialog
-        if mode == "Planning":
-            self.planning_mode_requested.emit()
-
     def _on_send(self):
         """Handle send button click - gather data from all panels."""
         user_input = self.llm_panel.get_user_input().strip()
@@ -343,6 +331,7 @@ class MainView(QtWidgets.QWidget):
         """Clear logs panel."""
         self.prompts_panel.clear_logs()
 
+    @QtCore.pyqtSlot(bool)
     def set_waiting(self, waiting):
         """Set waiting state (show/hide progress bar, enable/disable input)."""
         self.llm_panel.set_waiting(waiting)

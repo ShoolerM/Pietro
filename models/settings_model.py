@@ -3,41 +3,11 @@
 import json
 from pathlib import Path
 from base.observable import Observable
+from models import base_prompts
 
 
 class SettingsModel(Observable):
     """Manages application settings and configuration."""
-
-    # Default summary prompt template
-    DEFAULT_SUMMARY_PROMPT = (
-        "TASK: Create a detailed but condensed summary of this story.\n\n"
-        "REQUIREMENTS:\n"
-        "- List ALL main characters with their names, roles, and key personality traits\n"
-        "- Describe character relationships and dynamics between them\n"
-        "- Include ALL significant plot points in chronological order\n"
-        "- Preserve important dialogue or quotes that define characters\n"
-        "- Document world-building: locations, events, themes, etc.\n"
-        "- Note any ongoing conflicts, or unresolved plot threads\n"
-        "- Mention character motivations and goals\n"
-        "- Include relevant backstory and historical context\n"
-        "- Keep the summary detailed but aim for 30-40% of original length\n"
-        "- Write in present tense, organized by topic (characters, plot, setting, etc.)\n\n"
-    )
-
-    # Default notes prompt template
-    DEFAULT_NOTES_PROMPT = (
-        "TASK: Generate a structured notes section for the current scene.\n\n"
-        "REQUIREMENTS:\n"
-        "- List ALL current characters in the scene with their names and roles\n"
-        "- For each character, include: motivations, goals, current emotional state\n"
-        "- Document each character's clothing or appearance details\n"
-        "- Describe relationships and dynamics between characters in the scene\n"
-        "- State what each character was doing last (e.g., sitting, talking, fighting, etc.)\n"
-        "- Include any relevant physical location details or environmental context\n"
-        "- Note any props, objects, or items relevant to the scene\n"
-        "- Keep it concise but comprehensive - aim for 200-400 words\n"
-        "- Organize by character for clarity\n\n"
-    )
 
     def __init__(self):
         super().__init__()
@@ -53,8 +23,8 @@ class SettingsModel(Observable):
         self._smart_mode = False
         self._auto_notes = True  # Auto-generate notes by default
         self._render_markdown = True  # Render story as markdown by default
-        self._summary_prompt_template = self.DEFAULT_SUMMARY_PROMPT
-        self._notes_prompt_template = self.DEFAULT_NOTES_PROMPT
+        self._summary_prompt_template = base_prompts.DEFAULT_SUMMARY_PROMPT
+        self._notes_prompt_template = base_prompts.DEFAULT_NOTES_PROMPT
         self._planning_prompt_template = "What story would you like to plan?"
 
         # Per-model profile settings
@@ -76,6 +46,7 @@ class SettingsModel(Observable):
         self._load_render_markdown()
         self._load_model_profiles()
         self._load_last_model()
+        self._load_planning_conversation()
 
     @property
     def last_model(self):
@@ -645,3 +616,49 @@ class SettingsModel(Observable):
             print(f"✓ Saved smart_mode setting: {self._smart_mode}")
         except Exception as e:
             print(f"⚠ Error saving smart_mode setting: {e}")
+
+    def _load_planning_conversation(self):
+        """Load saved planning conversation from file."""
+        settings_dir = Path("settings")
+        settings_file = settings_dir / "planning_conversation.json"
+        if settings_file.exists():
+            try:
+                with open(settings_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    self._planning_conversation = data.get("conversation", [])
+                    self._planning_outline = data.get("outline", "")
+                    print(
+                        f"✓ Loaded planning conversation ({len(self._planning_conversation)} messages)"
+                    )
+            except Exception as e:
+                print(f"⚠ Error loading planning conversation: {e}")
+                self._planning_conversation = []
+                self._planning_outline = ""
+        else:
+            self._planning_conversation = []
+            self._planning_outline = ""
+
+    def save_planning_conversation(self, conversation, outline=""):
+        """Save planning conversation to file.
+
+        Args:
+            conversation: List of {"role": str, "content": str}
+            outline: Current outline text
+        """
+        settings_dir = Path("settings")
+        settings_dir.mkdir(exist_ok=True)
+        settings_file = settings_dir / "planning_conversation.json"
+        try:
+            data = {"conversation": conversation, "outline": outline}
+            with open(settings_file, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+        except Exception as e:
+            print(f"⚠ Error saving planning conversation: {e}")
+
+    def get_planning_conversation(self):
+        """Get saved planning conversation."""
+        return getattr(self, "_planning_conversation", [])
+
+    def get_planning_outline(self):
+        """Get saved planning outline."""
+        return getattr(self, "_planning_outline", "")

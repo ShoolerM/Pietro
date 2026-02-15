@@ -167,7 +167,7 @@ class PlanningModel(Observable):
     def parse_outline_tasks(self, outline_text: str) -> List[str]:
         """Parse outline markdown into list of task descriptions.
 
-        Extracts unchecked [ ] items from the outline.
+        Extracts unchecked [ ] items from the outline, including nested items.
 
         Args:
             outline_text: Markdown checklist text
@@ -177,11 +177,29 @@ class PlanningModel(Observable):
         """
         tasks = []
         for line in outline_text.strip().split("\n"):
-            line = line.strip()
-            # Look for unchecked markdown checkboxes
-            if line.startswith("- [ ]") or line.startswith("* [ ]"):
-                # Extract task text after checkbox
-                task = line[5:].strip()
+            # Strip leading whitespace but preserve the line structure
+            original_line = line
+            line = line.lstrip()
+
+            # Look for unchecked markdown checkboxes (handle nested items with indentation)
+            if "- [ ]" in line or "* [ ]" in line:
+                # Find the checkbox pattern and extract text after it
+                if line.startswith("- [ ]"):
+                    task = line[5:].strip()
+                elif line.startswith("* [ ]"):
+                    task = line[5:].strip()
+                else:
+                    # Handle cases where checkbox appears after indentation/bullets
+                    idx = line.find("- [ ]")
+                    if idx != -1:
+                        task = line[idx + 5 :].strip()
+                    else:
+                        idx = line.find("* [ ]")
+                        if idx != -1:
+                            task = line[idx + 5 :].strip()
+                        else:
+                            continue
+
                 if task:
                     tasks.append(task)
         return tasks

@@ -14,6 +14,10 @@ class LLMPanel(QtWidgets.QWidget):
     mode_changed = QtCore.pyqtSignal(str)  # "Normal", "Planning", "Smart Mode"
     model_changed = QtCore.pyqtSignal(str)
     model_refresh_clicked = QtCore.pyqtSignal()
+    start_writing_requested = QtCore.pyqtSignal(
+        str
+    )  # Emits outline when user types "Start Writing"
+    outline_changed = QtCore.pyqtSignal(str)  # Emits when outline is edited
 
     def __init__(self):
         super().__init__()
@@ -24,6 +28,12 @@ class LLMPanel(QtWidgets.QWidget):
             -1
         )  # Current position in history (-1 = current/new message)
         self.current_draft = ""  # Store current unsent message when navigating history
+
+        # Planning mode state
+        self._in_planning_mode = False
+        self._planning_conversation = []  # List of {"role": str, "content": str}
+        self._current_outline = ""  # Current outline text (editable)
+
         self._init_ui()
 
     def _init_ui(self):
@@ -38,8 +48,8 @@ class LLMPanel(QtWidgets.QWidget):
         thinking_container_layout.setContentsMargins(5, 5, 5, 5)
         thinking_container_layout.setSpacing(5)
 
-        thinking_label = QtWidgets.QLabel("LLM Panel")
-        thinking_container_layout.addWidget(thinking_label)
+        self.thinking_label = QtWidgets.QLabel("LLM Panel")
+        thinking_container_layout.addWidget(self.thinking_label)
 
         self.thinking_text = QtWidgets.QTextEdit()
         self.thinking_text.setReadOnly(True)
@@ -143,6 +153,36 @@ class LLMPanel(QtWidgets.QWidget):
         # Get the user's message before clearing
         user_message = self.get_user_input()
         if user_message:
+            # Check if in planning mode and message is "Start Writing"
+            if (
+                self._in_planning_mode
+                and user_message.strip().lower() == "start writing"
+            ):
+                # Extract outline and validate it exists
+                outline = self._extract_outline_from_conversation()
+                if not outline or not outline.strip():
+                    # No valid outline found
+                    self.append_llm_panel_text(
+                        "\n⚠️ **No outline found.** Please ask me to create an outline first before typing 'Start Writing'.\n\n"
+                    )
+                    self.clear_user_input()
+                    return
+
+                # Validate outline has at least one unchecked item
+                has_unchecked = "- [ ]" in outline
+                if not has_unchecked:
+                    self.append_llm_panel_text(
+                        "\n⚠️ **Outline has no remaining tasks.** The outline should contain unchecked items (- [ ]) to write.\n\n"
+                    )
+                    self.clear_user_input()
+                    return
+
+                # Valid outline exists, proceed with start writing
+                self.start_writing_requested.emit(outline)
+                # Clear input but don't add to history for "Start Writing" command
+                self.clear_user_input()
+                return
+
             # Add to message history
             self.add_user_message(user_message)
             # Reset history navigation
@@ -240,6 +280,16 @@ class LLMPanel(QtWidgets.QWidget):
         except Exception:
             pass
 
+    @QtCore.pyqtSlot(str)
+    def append_llm_panel_text(self, text):
+        """Append text to LLM Panel thinking text area."""
+        try:
+            self.thinking_text.moveCursor(QtGui.QTextCursor.End)
+            self.thinking_text.insertPlainText(text)
+            self.thinking_text.moveCursor(QtGui.QTextCursor.End)
+        except Exception:
+            pass
+
     def apply_font_size(self, size):
         """Apply font size to thinking text."""
         try:
@@ -284,6 +334,18 @@ class LLMPanel(QtWidgets.QWidget):
     def get_current_mode(self):
         """Get currently selected mode."""
         return self.mode_combo.currentText()
+
+    def set_mode(self, mode):
+        """Set the current mode.
+
+        Args:
+            mode: Mode name ("Normal", "Planning", "Smart Mode")
+        """
+        index = self.mode_combo.findText(mode)
+        if index >= 0:
+            self.mode_combo.blockSignals(True)
+            self.mode_combo.setCurrentIndex(index)
+            self.mode_combo.blockSignals(False)
 
     def set_waiting(self, waiting):
         """Show or hide the progress bar.
@@ -355,3 +417,171 @@ class LLMPanel(QtWidgets.QWidget):
         text = text.replace("'", "&#39;")
         text = text.replace("\n", "<br>")
         return text
+
+    # === Planning Mode Methods ===
+
+    def set_planning_mode(self, enabled):
+        """Enable or disable planning mode.
+
+        Args:
+            enabled: True for planning mode, False for normal mode
+        """
+        self._in_planning_mode = enabled
+        if enabled:
+            self.thinking_label.setText("📋 Planning Mode")
+            self.thinking_label.setStyleSheet(
+                "background-color: #2a4a2a; color: white; padding: 5px; font-weight: bold;"
+            )
+            self.thinking_text.setStyleSheet("border: 2px solid #4a7a4a;")
+        else:
+            self.thinking_label.setText("LLM Panel")
+            self.thinking_label.setStyleSheet("")
+            self.thinking_text.setStyleSheet("")
+
+    def is_planning_mode(self):
+        """Check if currently in planning mode."""
+        return self._in_planning_mode
+
+    @QtCore.pyqtSlot(str, str)
+    def add_planning_message(self, role, content):
+        """Add a message to planning conversation.
+
+        Args:
+            role: "user" or "assistant"
+            content: Message content
+        """
+        self._planning_conversation.append({"role": role, "content": content})
+        # Re-render the complete conversation with markdown
+        self._render_planning_conversation()
+
+    def _render_planning_conversation(self):
+        """Render the complete planning conversation with markdown."""
+        if not self._in_planning_mode:
+            return
+
+        try:
+            import markdown
+
+            html_parts = []
+            html_parts.append(
+                '<div style="font-family: sans-serif; line-height: 1.6;">'
+            )
+
+            for msg in self._planning_conversation:
+                role = msg["role"]
+                content = msg["content"]
+
+                if role == "user":
+                    # User messages in blue
+                    html_parts.append(
+                        '<div style="margin-bottom: 15px;">'
+                        '<strong style="color: #4a9eff;">You:</strong><br>'
+                        f'<div style="margin-left: 10px;">{self._escape_html(content)}</div>'
+                        "</div>"
+                    )
+                else:
+                    # Assistant messages with markdown rendering
+                    markdown_html = markdown.markdown(
+                        content, extensions=["fenced_code", "tables", "nl2br"]
+                    )
+                    html_parts.append(
+                        '<div style="margin-bottom: 15px;">'
+                        '<strong style="color: #4eff9e;">Assistant:</strong><br>'
+                        f'<div style="margin-left: 10px;">{markdown_html}</div>'
+                        "</div>"
+                    )
+
+            html_parts.append("</div>")
+
+            self.thinking_text.setHtml("".join(html_parts))
+            # Scroll to bottom
+            self.thinking_text.moveCursor(QtGui.QTextCursor.End)
+        except Exception as e:
+            print(f"Error rendering planning conversation: {e}")
+
+    def get_planning_conversation(self):
+        """Get the planning conversation history."""
+        return self._planning_conversation
+
+    def set_planning_conversation(self, conversation):
+        """Set the planning conversation history."""
+        self._planning_conversation = conversation
+        # Populate user message history for up-arrow navigation
+        self.user_message_history = [
+            msg["content"] for msg in conversation if msg["role"] == "user"
+        ]
+
+    def clear_planning_conversation(self):
+        """Clear the planning conversation."""
+        self._planning_conversation = []
+        self.clear_thinking_text()
+
+    def set_current_outline(self, outline):
+        """Set the current outline."""
+        self._current_outline = outline
+
+    def get_current_outline(self):
+        """Get the current outline."""
+        return self._current_outline
+
+    @QtCore.pyqtSlot(str)
+    def set_current_outline(self, outline):
+        """Set the current outline.
+
+        Args:
+            outline: Outline text in markdown checklist format
+        """
+        self._current_outline = outline
+
+    def display_planning_welcome(self, welcome_text):
+        """Display welcome message for planning mode."""
+        self.clear_thinking_text()
+        self.append_logs(f"📋 **Planning Mode Activated**\n\n{welcome_text}\n\n")
+        self.append_logs("---\n\n")
+
+    def _extract_outline_from_conversation(self):
+        """Extract the most recent outline from planning conversation.
+
+        Returns:
+            str: The extracted outline or empty string if none found
+        """
+        # Look through conversation in reverse to find most recent outline
+        for msg in reversed(self._planning_conversation):
+            if msg["role"] == "assistant":
+                content = msg["content"]
+                # Look for checklist items
+                lines = content.split("\n")
+                outline_lines = []
+                in_outline = False
+
+                for line in lines:
+                    stripped = line.strip()
+                    # Check for checklist items (with or without leading dash)
+                    if stripped.startswith("- [ ]") or stripped.startswith("- [x]"):
+                        in_outline = True
+                        outline_lines.append(line)
+                    elif stripped.startswith("[ ]") or stripped.startswith("[x]"):
+                        # Fix malformed checklist items missing the dash
+                        in_outline = True
+                        # Add the dash prefix to normalize format
+                        fixed_line = line.replace("[ ]", "- [ ]", 1).replace(
+                            "[x]", "- [x]", 1
+                        )
+                        outline_lines.append(fixed_line)
+                    elif in_outline and (
+                        stripped.startswith("-")
+                        or stripped.startswith("##")
+                        or stripped.startswith("#")
+                    ):
+                        outline_lines.append(line)
+                    elif in_outline and not stripped:
+                        continue  # Allow blank lines in outline
+                    elif in_outline and stripped:
+                        # Non-outline content, stop if we have outline lines
+                        if outline_lines:
+                            break
+
+                if outline_lines:
+                    return "\n".join(outline_lines)
+
+        return self._current_outline or ""

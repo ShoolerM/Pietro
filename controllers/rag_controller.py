@@ -304,12 +304,6 @@ class RAGController:
             log(f"\n✓ Successfully added {len(chunks)} chunks to '{db_name}'")
             log(f"{'=' * 80}\n")
 
-            # Show success message in LLM Panel if visible
-            if not progress and self.view.thinking_panel.isVisible():
-                self.view.append_logs(
-                    f"✓ Added '{file_name}' to '{db_name}' ({len(chunks)} chunks)\n"
-                )
-
         except Exception as e:
             error_msg = f"❌ FATAL ERROR ingesting file '{file_path}'"
             log(f"\n{error_msg}")
@@ -368,20 +362,28 @@ class RAGController:
             ".rtf",
             ".xml",
         }
+
         file_paths = []
 
         for selection_str in selected:
             selection = Path(selection_str)
             if selection.is_dir():
-                # Recursively find all text files in directory
+                # Recursively find all text files in directory, excluding hidden directories
                 for file_path in selection.rglob("*"):
+                    # Skip hidden files and directories (starting with .)
+                    if any(
+                        part.startswith(".")
+                        for part in file_path.parts[len(selection.parts) :]
+                    ):
+                        continue
+
                     if (
                         file_path.is_file()
                         and file_path.suffix.lower() in text_extensions
                     ):
                         file_paths.append(str(file_path))
             elif selection.is_file():
-                # Add file directly
+                # Add file directly (user explicitly selected it)
                 file_paths.append(str(selection))
 
         if not file_paths:
@@ -592,6 +594,24 @@ class RAGController:
                 self.view.append_logs(f"\n⚠️  No results found in any database")
                 self.view.append_logs(f"{'=' * 80}\n")
                 return ""
+
+            # Deduplicate results based on content
+            # The vectorstore may contain duplicate documents with different IDs
+            seen_contents = {}
+            deduped_results = []
+            for doc, score in all_results:
+                content_hash = hash(doc.page_content)
+                if content_hash not in seen_contents:
+                    seen_contents[content_hash] = True
+                    deduped_results.append((doc, score))
+
+            if len(deduped_results) < len(all_results):
+                duplicates_removed = len(all_results) - len(deduped_results)
+                self.view.append_logs(
+                    f"Deduplication: removed {duplicates_removed} duplicate chunks"
+                )
+
+            all_results = deduped_results
 
             # Sort by relevance (lower score = more relevant)
             all_results.sort(key=lambda x: x[1])

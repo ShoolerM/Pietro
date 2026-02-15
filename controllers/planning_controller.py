@@ -8,12 +8,11 @@ Handles all planning mode logic including:
 
 import threading
 import traceback
-import json
 from typing import Optional, Dict, Any, Callable
 from PyQt5 import QtCore
 
+from models import base_prompts
 from models.planning_model import PlanningModel
-from views.planning_mode_dialog import PlanningModeDialog
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 
 
@@ -70,58 +69,205 @@ class PlanningController:
         self._on_notes_ready_callback = on_notes_ready
         self._on_chunk_complete_callback = on_chunk_complete
 
-    def start_planning_mode(self):
-        """Open planning mode dialog for interactive outline creation."""
-        # Create dialog
-        dialog = PlanningModeDialog(
-            parent=self.view,
-            initial_prompt=self.settings_model.planning_prompt_template,
-        )
-
-        # Restore previous conversation
-        if self.planning_model.conversation_markdown:
-            dialog.set_conversation(self.planning_model.conversation_markdown)
-
-        # Connect dialog signals
-        dialog.user_input_ready.connect(lambda text: self._on_user_input(text, dialog))
-        dialog.start_writing_clicked.connect(
-            lambda outline: self._on_start_writing(outline)
-        )
-        dialog.dialog_cancelled.connect(lambda: print("Planning mode cancelled"))
-
-        # Show dialog
-        result = dialog.show_with_initial_prompt()
-
-        # Save conversation
-        self.planning_model.conversation_markdown = dialog.get_conversation_text()
-
-        if result == dialog.Accepted:
-            print("Planning mode completed successfully")
-        else:
-            print("Planning mode cancelled by user")
-
-    def _on_user_input(self, user_text: str, dialog: PlanningModeDialog):
-        """Handle user input in planning dialog.
+    def handle_planning_message(
+        self, user_input, conversation_history, current_outline
+    ):
+        """Handle a planning conversation message without dialog.
 
         Args:
-            user_text: User's message
-            dialog: Planning mode dialog instance
+            user_input: User's message
+            conversation_history: Full conversation history
+            current_outline: Current outline state
         """
-        dialog.set_waiting.emit(True)
+        # Build context for planning
+        context = self._build_planning_context(user_input, current_outline)
 
-        # Add to conversation history
-        self.planning_model.add_message("user", user_text)
+        # Set waiting state
+        self.view.set_waiting(True)
 
-        # Build context
-        context = self._build_planning_context(user_text, dialog.get_current_outline())
-
-        # Start background thread for LLM
+        # Start background thread for LLM streaming to panel
         thread = threading.Thread(
-            target=self._planning_thread,
-            args=(user_text, context, dialog),
+            target=self._planning_thread_for_panel,
+            args=(user_input, context, conversation_history),
             daemon=True,
         )
         thread.start()
+
+    def _planning_thread_for_panel(self, user_input, context, conversation_history):
+        """Background thread for planning LLM interaction (panel version).
+
+        Args:
+            user_input: User's message
+            context: Built context string (system message)
+            conversation_history: Full conversation history
+        """
+        try:
+            # Build messages for LLM
+            messages = [
+                SystemMessage(content=context),
+            ]
+
+            # Add conversation history (excluding the just-added user message)
+            for msg in conversation_history[:-1]:
+                if msg["role"] == "user":
+                    messages.append(HumanMessage(content=msg["content"]))
+                else:
+                    messages.append(AIMessage(content=msg["content"]))
+
+            # Add current user message
+            messages.append(HumanMessage(content=user_input))
+
+            # Detect if user is asking for an outline
+            outline_keywords = [
+                "outline",
+                "plan",
+                "structure",
+                "plot points",
+                "story beats",
+            ]
+            is_outline_request = any(
+                keyword in user_input.lower() for keyword in outline_keywords
+            )
+
+            # Try structured output first if it seems like an outline request
+            if is_outline_request:
+                try:
+                    from models.planning_model import StoryOutline
+
+                    # Try to get structured outline
+                    structured_llm = self.llm_controller.llm.with_structured_output(
+                        StoryOutline
+                    )
+                    result = structured_llm.invoke(messages)
+
+                    # Convert structured outline to markdown
+                    outline_lines = []
+                    if result.discussion:
+                        outline_lines.append(result.discussion)
+                        outline_lines.append("")
+
+                    for point in result.plot_points:
+                        checkbox = "[x]" if point.completed else "[ ]"
+                        outline_lines.append(f"- {checkbox} {point.description}")
+
+                    response_text = "\n".join(outline_lines)
+
+                    # Display in panel
+                    QtCore.QMetaObject.invokeMethod(
+                        self.view.llm_panel,
+                        "append_llm_panel_text",
+                        QtCore.Qt.QueuedConnection,
+                        QtCore.Q_ARG(str, "\n**Assistant:** "),
+                    )
+                    QtCore.QMetaObject.invokeMethod(
+                        self.view.llm_panel,
+                        "append_llm_panel_text",
+                        QtCore.Qt.QueuedConnection,
+                        QtCore.Q_ARG(str, response_text),
+                    )
+                    QtCore.QMetaObject.invokeMethod(
+                        self.view.llm_panel,
+                        "append_llm_panel_text",
+                        QtCore.Qt.QueuedConnection,
+                        QtCore.Q_ARG(str, "\n\n"),
+                    )
+
+                    # Add to conversation
+                    QtCore.QMetaObject.invokeMethod(
+                        self.view.llm_panel,
+                        "add_planning_message",
+                        QtCore.Qt.QueuedConnection,
+                        QtCore.Q_ARG(str, "assistant"),
+                        QtCore.Q_ARG(str, response_text),
+                    )
+
+                    # Store the validated outline
+                    QtCore.QMetaObject.invokeMethod(
+                        self.view.llm_panel,
+                        "set_current_outline",
+                        QtCore.Qt.QueuedConnection,
+                        QtCore.Q_ARG(str, response_text),
+                    )
+
+                    # Save conversation
+                    self.settings_model.save_planning_conversation(
+                        self.view.llm_panel.get_planning_conversation(),
+                        response_text,
+                    )
+
+                    return  # Success with structured output
+
+                except Exception as struct_error:
+                    # Structured output failed, fall back to streaming
+                    print(f"Structured output failed, using streaming: {struct_error}")
+
+            # Fallback: Stream response to panel (for non-outline or if structured failed)
+            response_buffer = []
+
+            # Add assistant prefix to panel
+            QtCore.QMetaObject.invokeMethod(
+                self.view.llm_panel,
+                "append_llm_panel_text",
+                QtCore.Qt.QueuedConnection,
+                QtCore.Q_ARG(str, "\n**Assistant:** "),
+            )
+
+            # Invoke LLM with streaming
+            for chunk in self.llm_controller.llm.stream(messages):
+                token = chunk.content
+                response_buffer.append(token)
+                # Stream to LLM panel
+                QtCore.QMetaObject.invokeMethod(
+                    self.view.llm_panel,
+                    "append_llm_panel_text",
+                    QtCore.Qt.QueuedConnection,
+                    QtCore.Q_ARG(str, token),
+                )
+
+            # Add newline after response
+            QtCore.QMetaObject.invokeMethod(
+                self.view.llm_panel,
+                "append_llm_panel_text",
+                QtCore.Qt.QueuedConnection,
+                QtCore.Q_ARG(str, "\n\n"),
+            )
+
+            # Complete response text
+            response_text = "".join(response_buffer)
+
+            # Add to panel's conversation
+            QtCore.QMetaObject.invokeMethod(
+                self.view.llm_panel,
+                "add_planning_message",
+                QtCore.Qt.QueuedConnection,
+                QtCore.Q_ARG(str, "assistant"),
+                QtCore.Q_ARG(str, response_text),
+            )
+
+            # Save conversation via settings model (thread-safe file I/O)
+            self.settings_model.save_planning_conversation(
+                self.view.llm_panel.get_planning_conversation(),
+                self.view.llm_panel.get_current_outline(),
+            )
+
+        except Exception as e:
+            error_msg = f"\n\n❌ Error: {str(e)}\n\n"
+            QtCore.QMetaObject.invokeMethod(
+                self.view.llm_panel,
+                "append_llm_panel_text",
+                QtCore.Qt.QueuedConnection,
+                QtCore.Q_ARG(str, error_msg),
+            )
+            print(f"Planning thread error: {e}")
+            traceback.print_exc()
+        finally:
+            # Hide waiting indicator
+            QtCore.QMetaObject.invokeMethod(
+                self.view,
+                "set_waiting",
+                QtCore.Qt.QueuedConnection,
+                QtCore.Q_ARG(bool, False),
+            )
 
     def _build_planning_context(
         self, user_text: str, current_outline: Optional[str]
@@ -188,33 +334,7 @@ class PlanningController:
         )
 
         # Build system message
-        system_content = """You are a creative writing assistant helping plan a story outline.
-
-Your role is to:
-1. Ask clarifying questions in the CHAT to help develop the story idea
-2. When the user is ready, provide a complete outline in markdown checklist format
-3. If an outline already exists, you can refine/update it based on user feedback
-4. If story content already exists, analyze what's been written and mark completed plot points
-
-IMPORTANT RULES:
-- Ask questions and have discussions in the CHAT (normal conversation)
-- ONLY provide a checklist outline when the user explicitly asks for it or when you have enough information
-- If providing an outline, format it as a markdown checklist with ONLY actual plot points/story events:
-  - [x] Completed plot point (ONLY if this specific event is already written in the existing story)
-  - [ ] Remaining plot point (if not yet written OR if you're adding a new plot point to extend the story)
-- If NO story content exists yet, ALL plot points MUST be marked as [ ] (unchecked/remaining)
-- When story content exists, carefully analyze it and mark ONLY the plot points that describe events explicitly covered in that text as [x] completed
-- When adding NEW plot points to continue or extend the story, those new points MUST be marked as [ ] (unchecked) because they haven't been written yet
-- The "completed" checkbox means "this event has already been written in the story" - NOT "this event should happen" or "this is part of the plan"
-- Completed items should summarize what was actually written in the existing story text
-- Remaining items should describe what still needs to be written
-- DO NOT mark items as completed unless they describe events that are explicitly written in the existing story content
-- DO NOT include metadata as checklist items (themes, setting descriptions, character lists, tone, style, etc.)
-- Each checklist item should describe a specific narrative event or action that happens in the story
-- You MAY include metadata/themes in regular text OUTSIDE the checklist if helpful
-- If refining an existing outline, provide the complete updated outline as a checklist
-- Focus on WHAT HAPPENS in the story, not abstract concepts or meta-information"""
-
+        system_content = base_prompts.PLANNING_PROMPT
         # Add story context
         if story_context:
             system_content += (
@@ -244,157 +364,6 @@ IMPORTANT RULES:
             )
 
         return system_content
-
-    def _planning_thread(
-        self, user_text: str, system_content: str, dialog: PlanningModeDialog
-    ):
-        """Background thread for LLM conversation.
-
-        Args:
-            user_text: User's message
-            system_content: System message with context
-            dialog: Planning dialog for signal emission
-        """
-        try:
-            # Build messages
-            messages = [SystemMessage(content=system_content)]
-            for msg in self.planning_model.conversation_history:
-                if msg["role"] == "user":
-                    messages.append(HumanMessage(content=msg["content"]))
-                else:
-                    messages.append(AIMessage(content=msg["content"]))
-
-            # Check if requesting outline
-            user_msg_lower = user_text.lower()
-            requesting_outline = any(
-                keyword in user_msg_lower
-                for keyword in [
-                    "outline",
-                    "plot points",
-                    "story plan",
-                    "structure",
-                    "give me",
-                    "create",
-                    "write",
-                    "make",
-                ]
-            )
-
-            full_response = ""
-
-            # Use regular streaming for all responses (including outlines)
-            # The system prompt already instructs the model on proper outline formatting
-            for chunk in self.llm_controller.llm.stream(messages):
-                if hasattr(chunk, "content"):
-                    text = chunk.content
-                    full_response += text
-                    dialog.llm_token_received.emit(text)
-
-            # Add to history
-            self.planning_model.add_message("assistant", full_response)
-
-            # Emit completion
-            dialog.llm_response_complete.emit(full_response)
-            dialog.set_waiting.emit(False)
-
-        except Exception as e:
-            print(f"Error in planning LLM: {e}")
-
-            traceback.print_exc()
-            dialog.set_waiting.emit(False)
-
-    def _generate_structured_outline(
-        self, messages: list, dialog: PlanningModeDialog
-    ) -> str:
-        """Generate outline using structured output.
-
-        Args:
-            messages: Message history for LLM
-            dialog: Dialog for signal emission
-
-        Returns:
-            Formatted outline as markdown
-        """
-        # JSON schema for structured output
-        json_schema = {
-            "type": "json_schema",
-            "json_schema": {
-                "name": "story_outline",
-                "strict": True,
-                "schema": {
-                    "type": "object",
-                    "properties": {
-                        "plot_points": {
-                            "type": "array",
-                            "items": {
-                                "type": "object",
-                                "properties": {
-                                    "description": {
-                                        "type": "string",
-                                        "description": "A specific narrative event or action that happens in the story",
-                                    },
-                                    "completed": {
-                                        "type": "boolean",
-                                        "description": "True if this plot point has already been written in the existing story, False if it still needs to be written",
-                                    },
-                                },
-                                "required": ["description", "completed"],
-                                "additionalProperties": False,
-                            },
-                        },
-                        "discussion": {
-                            "type": ["string", "null"],
-                            "description": "Optional discussion, questions, or explanatory text about the outline (but not the outline itself)",
-                        },
-                    },
-                    "required": ["plot_points"],
-                    "additionalProperties": False,
-                },
-            },
-        }
-
-        # Bind and invoke
-        structured_llm = self.llm_controller.llm.bind(response_format=json_schema)
-        response = structured_llm.invoke(messages)
-
-        # Parse JSON
-        result = json.loads(response.content)
-
-        # Convert to markdown
-        full_response = ""
-        if result.get("discussion"):
-            full_response = result["discussion"] + "\n\n"
-
-        full_response += "Here's your outline:\n\n"
-        for plot_point in result.get("plot_points", []):
-            checkbox = "[x]" if plot_point.get("completed", False) else "[ ]"
-            full_response += f"- {checkbox} {plot_point['description']}\n"
-
-        # Emit as single block
-        dialog.llm_token_received.emit(full_response)
-        return full_response
-
-    def _on_start_writing(self, outline: str):
-        """Handle start writing from planning dialog.
-
-        Args:
-            outline: Markdown checklist outline
-        """
-        # Store outline
-        self.story_model.planning_outline = outline
-        self.story_model.planning_active = True
-        self.planning_model.current_outline = outline
-
-        print("✓ Planning mode completed")
-        print(f"Outline stored:\n{outline}")
-
-        # Gather context
-        notes = self.view.prompts_panel.get_notes_text().strip()
-        supp_text = self.view.prompts_panel.gather_supplemental_text()
-        system_prompt = self.view.prompts_panel.get_system_prompt_text()
-
-        # Start outline-driven generation
-        self.start_outline_build(outline, notes, supp_text, system_prompt)
 
     def start_outline_build(
         self, outline: str, notes: str, supp_text: str, system_prompt: str
@@ -441,8 +410,7 @@ IMPORTANT RULES:
         self.llm_controller.llm_model.reset_stop_flag()
         self.view.set_stop_enabled(True)
 
-        # Show status
-        self.view.clear_thinking_text()
+        # Show status in LLM panel (logs)
         self.view.append_logs(f"\n{'=' * 60}\n")
         self.view.append_logs("📋 PLANNING MODE: OUTLINE-DRIVEN GENERATION\n")
         self.view.append_logs(f"{'=' * 60}\n\n")
@@ -785,7 +753,7 @@ IMPORTANT RULES:
             return
 
         self.view.append_logs(f"\n\n{'=' * 60}\n")
-        self.view.append_logs("✅ PLANNING BUILD COMPLETE\n")
+        self.view.append_logs("\u2705 PLANNING BUILD COMPLETE\n")
         self.view.append_logs(
             f"All {len(state['original_tasks'])} plot points addressed.\n"
         )
@@ -805,7 +773,7 @@ IMPORTANT RULES:
             return
 
         self.view.append_logs(f"\n\n{'=' * 60}\n")
-        self.view.append_logs("⏹️ PLANNING BUILD STOPPED BY USER\n")
+        self.view.append_logs("\u23f9\ufe0f PLANNING BUILD STOPPED BY USER\n")
         self.view.append_logs(
             f"Completed {state['current_task_index']}/{len(state['original_tasks'])} plot points.\n"
         )

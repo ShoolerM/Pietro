@@ -155,7 +155,9 @@ class MainController:
         )
         self.view.update_accepted.connect(self._on_update_accepted)
         self.view.update_rejected.connect(self._on_update_rejected)
-        self.view.planning_mode_requested.connect(self._on_planning_mode_requested)
+        self.view.llm_panel.start_writing_requested.connect(
+            self._on_start_writing_from_planning
+        )
 
     def _connect_observers(self):
         """Connect model observers to update view."""
@@ -417,6 +419,8 @@ class MainController:
                 )
                 if profile:
                     self._apply_model_profile(profile)
+                # Update the LLM controller with the last model
+                self.llm_controller.update_model(self.settings_model.last_model)
         elif event_type == "model_changed":
             # Model already updated
             pass
@@ -430,6 +434,12 @@ class MainController:
             supp_text: Supplemental prompts text
             system_prompt: System prompt text
         """
+        # Check if in Planning mode
+        if self.view.llm_panel.is_planning_mode():
+            # Handle planning conversation
+            self._handle_planning_conversation(user_input)
+            return
+
         # Check if Build with Smart Mode is enabled
         if self.settings_model.smart_mode:
             # Trigger auto-build story mode with the user's input and context
@@ -485,6 +495,31 @@ class MainController:
 
         # Continue with story generation
         self._continue_send(user_input, notes, supp_text, system_prompt)
+
+    def _handle_planning_conversation(self, user_input):
+        """Handle user input during planning mode.
+
+        Args:
+            user_input: User's message
+        """
+        # Add user message to planning conversation
+        self.view.llm_panel.add_planning_message("user", user_input)
+
+        # Save conversation
+        self.settings_model.save_planning_conversation(
+            self.view.llm_panel.get_planning_conversation(),
+            self.view.llm_panel.get_current_outline(),
+        )
+
+        # Clear the input field
+        self.view.llm_panel.clear_user_input()
+
+        # Delegate to planning controller for LLM response
+        self.planning_controller.handle_planning_message(
+            user_input,
+            self.view.llm_panel.get_planning_conversation(),
+            self.view.llm_panel.get_current_outline(),
+        )
 
     def _continue_send(self, user_input, notes, supp_text, system_prompt):
         """Continue with story generation (after notes are ready or if not needed)."""
@@ -722,7 +757,7 @@ class MainController:
             final_query,
             system_prompt,
             self._on_text_appended,
-            self.view.append_thinking_text,
+            self.view.append_llm_panel_text,
             self._on_render_markdown,
             self.view.set_waiting,
             self.view.set_stop_enabled,
@@ -831,7 +866,7 @@ class MainController:
             final_query,
             system_prompt,
             self._on_text_appended,
-            self.view.append_thinking_text,
+            self.view.append_llm_panel_text,
             self._on_render_markdown,
             self.view.set_waiting,
             self.view.set_stop_enabled,
@@ -843,10 +878,8 @@ class MainController:
         Args:
             error_message: Error description
         """
-        self.view.append_thinking_text(
-            f"\n❌ Chunking/summarization error: {error_message}\n"
-        )
-        self.view.append_thinking_text("Falling back to recent content only...\n\n")
+        self.view.append_logs(f"\n❌ Chunking/summarization error: {error_message}\n")
+        self.view.append_logs("Falling back to recent content only...\n\n")
 
         # Get recent content as fallback
         if not hasattr(self, "_pending_send_context"):
@@ -920,7 +953,7 @@ class MainController:
         """Handle refresh models button click."""
         success, result = self.llm_model.fetch_available_models()
         if not success:
-            self.view.set_model_error(result)
+            self.view.append_logs(result)
 
     def _on_model_changed(self, model_name):
         """Handle model selection change."""
@@ -1205,11 +1238,10 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
         self.summary_model.clear()
 
         # Show notification in LLM Panel
-        self.view.clear_thinking_text()
-        self.view.append_thinking_text(f"\n{'=' * 60}\n")
-        self.view.append_thinking_text("🔄 REGENERATING STORY SUMMARY\n")
-        self.view.append_thinking_text("Processing entire story from scratch...\n")
-        self.view.append_thinking_text(f"{'=' * 60}\n\n")
+        self.view.append_logs(f"\n{'=' * 60}\n")
+        self.view.append_logs("🔄 REGENERATING STORY SUMMARY\n")
+        self.view.append_logs("Processing entire story from scratch...\n")
+        self.view.append_logs(f"{'=' * 60}\n\n")
 
         # Calculate context budget
         context_limit = self.settings_model.context_limit
@@ -1235,9 +1267,9 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
         # Get story token count
         story_tokens = self.story_model.estimate_token_count(current_story)
 
-        self.view.append_thinking_text(f"Story size: {story_tokens} tokens\n")
-        self.view.append_thinking_text(f"Target raw content: {max_raw_tokens} tokens\n")
-        self.view.append_thinking_text(
+        self.view.append_logs(f"Story size: {story_tokens} tokens\n")
+        self.view.append_logs(f"Target raw content: {max_raw_tokens} tokens\n")
+        self.view.append_logs(
             f"Target rolling summary: {max_rolling_summary_tokens} tokens\n\n"
         )
 
@@ -1246,16 +1278,12 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
 
         # Process in background thread
         def on_complete(story_for_llm, tokens):
-            self.view.append_thinking_text("\n✅ Summary regeneration complete!\n")
-            self.view.append_thinking_text(
-                "Summary will be used for next generation.\n"
-            )
+            self.view.append_logs("\n✅ Summary regeneration complete!\n")
+            self.view.append_logs("Summary will be used for next generation.\n")
             self.view.set_waiting(False)
 
         def on_error(error_msg):
-            self.view.append_thinking_text(
-                f"\n❌ Error regenerating summary: {error_msg}\n"
-            )
+            self.view.append_logs(f"\n❌ Error regenerating summary: {error_msg}\n")
             self.view.set_waiting(False)
 
         self.llm_controller.process_story_with_summarization(
@@ -1263,7 +1291,7 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
             max_raw_tokens,
             max_rolling_summary_tokens,
             self.summary_model,
-            self.view.append_thinking_text,
+            self.view.append_logs,
             on_complete,
             on_error,
             self.view.set_waiting,
@@ -1560,7 +1588,7 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
                 max_raw_tokens,
                 max_rolling_summary_tokens,
                 self.summary_model,
-                self.view.append_thinking_text,
+                self.view.append_llm_panel_text,
                 self._on_auto_build_summarization_complete,
                 self._on_auto_build_error,
                 self.view.set_waiting,
@@ -1612,7 +1640,7 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
             state["system_prompt"],
             state["paragraphs_per_chunk"],
             self.view.append_story_content,
-            self.view.append_thinking_text,
+            self.view.append_llm_panel_text,
             lambda: self._on_chunk_complete(),
             self.view.set_waiting,
             self.view.set_stop_enabled,
@@ -1624,12 +1652,10 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
 
         # Check if user requested stop
         if self.llm_model.stop_generation:
-            self.view.append_thinking_text(f"\n\n{'=' * 60}\n")
-            self.view.append_thinking_text("⏹️ AUTO BUILD STOPPED BY USER\n")
-            self.view.append_thinking_text(
-                f"Generated {state['chunk_count']} chunks.\n"
-            )
-            self.view.append_thinking_text(f"{'=' * 60}\n")
+            self.view.append_logs(f"\n\n{'=' * 60}\n")
+            self.view.append_logs("⏹️ AUTO BUILD STOPPED BY USER\n")
+            self.view.append_logs(f"Generated {state['chunk_count']} chunks.\n")
+            self.view.append_logs(f"{'=' * 60}\n")
             self.view.set_stop_enabled(False)
             # Render markdown
             self._markdown_content = self.view.get_story_content()
@@ -1686,13 +1712,6 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
                 self.view.show_warning(
                     "Save Error", "Failed to save summarization prompt"
                 )
-
-    def _on_planning_mode_requested(self):
-        """Handle Planning Mode menu action.
-
-        Delegates to planning controller.
-        """
-        self.planning_controller.start_planning_mode()
 
     def _on_notes_prompt_requested(self):
         """Handle notes prompt settings menu action."""
@@ -1757,7 +1776,7 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
             self.view.append_logs(f"✓ Context limit set to: {result} tokens")
 
     def _on_mode_changed(self, mode):
-        """Handle mode change from bottom control panel."""
+        """Handle mode change from LLM panel."""
         self.view.append_logs(f"Mode changed to: {mode}")
 
         # If Smart Mode is selected, enable smart_mode
@@ -1765,14 +1784,27 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
             if not self.settings_model.smart_mode:
                 self.settings_model.smart_mode = True
                 self.view.set_smart_mode(True)
-                self.view.append_logs("✓ Smart Mode enabled (build with RAG)")
-        # If Normal mode, disable smart_mode
+                self.view.append_logs(
+                    "✓ Smart Mode enabled (continuous writing with RAG)"
+                )
+            # Disable planning mode if it was active
+            self.view.llm_panel.set_planning_mode(False)
+        # If Normal mode, disable smart_mode and planning mode
         elif mode == "Normal":
             if self.settings_model.smart_mode:
                 self.settings_model.smart_mode = False
                 self.view.set_smart_mode(False)
-                self.view.append_logs("✓ Normal mode (build with RAG disabled)")
-        # Planning mode is handled by MainView opening the planning dialog
+                self.view.append_logs("✓ Normal mode")
+            # Disable planning mode if it was active
+            self.view.llm_panel.set_planning_mode(False)
+        # If Planning mode, initialize planning
+        elif mode == "Planning":
+            # Disable smart mode if it was active
+            if self.settings_model.smart_mode:
+                self.settings_model.smart_mode = False
+                self.view.set_smart_mode(False)
+            # Initialize planning mode
+            self._initialize_planning_mode()
 
     def _on_model_settings_requested(self):
         """Handle model settings dialog request."""
@@ -1785,7 +1817,7 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
             self.view.append_logs(f"✓ Context limit set to: {result} tokens")
 
     def _on_mode_changed(self, mode):
-        """Handle mode change from bottom control panel."""
+        """Handle mode change from LLM panel."""
         self.view.append_logs(f"Mode changed to: {mode}")
 
         # If Smart Mode is selected, enable smart_mode
@@ -1793,14 +1825,88 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
             if not self.settings_model.smart_mode:
                 self.settings_model.smart_mode = True
                 self.view.set_smart_mode(True)
-                self.view.append_logs("✓ Smart Mode enabled (build with RAG)")
-        # If Normal mode, disable smart_mode
+                self.view.append_logs(
+                    "✓ Smart Mode enabled (continuous writing with RAG)"
+                )
+            # Disable planning mode if it was active
+            self.view.llm_panel.set_planning_mode(False)
+        # If Normal mode, disable smart_mode and planning mode
         elif mode == "Normal":
             if self.settings_model.smart_mode:
                 self.settings_model.smart_mode = False
                 self.view.set_smart_mode(False)
-                self.view.append_logs("✓ Normal mode (build with RAG disabled)")
-        # Planning mode is handled by MainView opening the planning dialog
+                self.view.append_logs("✓ Normal mode")
+            # Disable planning mode if it was active
+            self.view.llm_panel.set_planning_mode(False)
+        # If Planning mode, initialize planning
+        elif mode == "Planning":
+            # Disable smart mode if it was active
+            if self.settings_model.smart_mode:
+                self.settings_model.smart_mode = False
+                self.view.set_smart_mode(False)
+            # Initialize planning mode
+            self._initialize_planning_mode()
+
+    def _initialize_planning_mode(self):
+        """Initialize planning mode in LLM Panel."""
+        # Enable planning mode in panel
+        self.view.llm_panel.set_planning_mode(True)
+
+        # Load saved conversation ONLY for user message history (arrow key navigation)
+        saved_conversation = self.settings_model.get_planning_conversation()
+
+        if saved_conversation:
+            # Extract only user messages for arrow key recall
+            user_messages = [
+                msg["content"] for msg in saved_conversation if msg["role"] == "user"
+            ]
+            self.view.llm_panel.user_message_history = user_messages
+
+        # Always show welcome message (fresh start, don't restore old conversations)
+        welcome_text = (
+            self.settings_model.planning_prompt_template
+            or "Let's plan your story! Describe what you'd like to write about."
+        )
+        self.view.llm_panel.display_planning_welcome(welcome_text)
+        self.view.llm_panel.append_llm_panel_text(
+            '*When ready, type "Start Writing" to begin story generation.*\n\n'
+        )
+
+    def _on_start_writing_from_planning(self, outline):
+        """Handle start writing request from planning mode.
+
+        Args:
+            outline: The outline text to use for generation
+        """
+        self.view.llm_panel.append_llm_panel_text(
+            "\n\n🚀 **Starting Story Generation...**\n\n"
+        )
+
+        # Store outline in story model
+        self.story_model.planning_outline = outline
+        self.story_model.planning_active = True
+        self.planning_model.current_outline = outline
+
+        # Save planning state
+        self.settings_model.save_planning_conversation(
+            self.view.llm_panel.get_planning_conversation(), outline
+        )
+
+        # Gather context
+        notes = self.view.prompts_panel.get_notes_text().strip()
+        supp_text = self.view.prompts_panel.gather_supplemental_text()
+        system_prompt = self.view.prompts_panel.get_system_prompt_text()
+
+        # Disable planning mode in panel (keep conversation visible)
+        self.view.llm_panel.set_planning_mode(False)
+
+        # Switch mode selector back to Normal
+        self.view.llm_panel.set_mode("Normal")
+
+        # Start outline-driven generation
+        self.planning_controller.start_outline_build(
+            outline, notes, supp_text, system_prompt
+        )
 
     def _on_inference_settings_requested(self):
         """Handle inference settings dialog request."""
