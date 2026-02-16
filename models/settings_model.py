@@ -47,6 +47,7 @@ class SettingsModel(Observable):
         self._load_model_profiles()
         self._load_last_model()
         self._load_planning_conversation()
+        self._load_normal_conversation()
 
     @property
     def last_model(self):
@@ -638,6 +639,24 @@ class SettingsModel(Observable):
             self._planning_conversation = []
             self._planning_outline = ""
 
+    def _load_normal_conversation(self):
+        """Load saved normal conversation from file."""
+        settings_dir = Path("settings")
+        settings_file = settings_dir / "normal_conversation.json"
+        if settings_file.exists():
+            try:
+                with open(settings_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    self._normal_conversation = data.get("conversation", [])
+                    print(
+                        f"✓ Loaded normal conversation ({len(self._normal_conversation)} messages)"
+                    )
+            except Exception as e:
+                print(f"⚠ Error loading normal conversation: {e}")
+                self._normal_conversation = []
+        else:
+            self._normal_conversation = []
+
     def save_planning_conversation(self, conversation, outline=""):
         """Save planning conversation to file.
 
@@ -662,3 +681,30 @@ class SettingsModel(Observable):
     def get_planning_outline(self):
         """Get saved planning outline."""
         return getattr(self, "_planning_outline", "")
+
+    def save_normal_conversation(self, conversation):
+        """Save normal conversation to file.
+
+        Args:
+            conversation: List of {"role": str, "content": str}
+        """
+        settings_dir = Path("settings")
+        settings_dir.mkdir(exist_ok=True)
+        settings_file = settings_dir / "normal_conversation.json"
+        try:
+            data = {"conversation": conversation}
+            with open(settings_file, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+        except Exception as e:
+            print(f"⚠ Error saving normal conversation: {e}")
+
+    def get_normal_conversation(self):
+        """Get saved normal conversation."""
+        return getattr(self, "_normal_conversation", [])
+
+    def append_normal_message(self, role, content):
+        """Append a message to the normal conversation and persist it."""
+        if not hasattr(self, "_normal_conversation"):
+            self._normal_conversation = []
+        self._normal_conversation.append({"role": role, "content": content})
+        self.save_normal_conversation(self._normal_conversation)

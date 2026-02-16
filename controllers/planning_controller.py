@@ -16,14 +16,6 @@ from models.planning_model import PlanningModel
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 
 
-class PlanningNotesSignals(QtCore.QObject):
-    """Signals for planning notes generation (thread-safe)."""
-
-    notes_chunk = QtCore.pyqtSignal(str)
-    notes_ready = QtCore.pyqtSignal(str, int)
-    notes_error = QtCore.pyqtSignal(str)
-
-
 class PlanningController(QtCore.QObject):
     """Controller for planning mode functionality."""
 
@@ -36,6 +28,7 @@ class PlanningController(QtCore.QObject):
         rag_controller,
         rag_model,
         summary_model,
+        notes_controller,
         view,
     ):
         super().__init__()
@@ -46,19 +39,8 @@ class PlanningController(QtCore.QObject):
         self.rag_controller = rag_controller
         self.rag_model = rag_model
         self.summary_model = summary_model
+        self.notes_controller = notes_controller
         self.view = view
-
-        # Signals for notes generation
-        self._notes_signals = PlanningNotesSignals()
-        self._notes_signals.notes_chunk.connect(
-            self._on_planning_notes_chunk, QtCore.Qt.QueuedConnection
-        )
-        self._notes_signals.notes_ready.connect(
-            self._on_planning_notes_generated, QtCore.Qt.QueuedConnection
-        )
-        self._notes_signals.notes_error.connect(
-            self._on_planning_notes_error, QtCore.Qt.QueuedConnection
-        )
 
         # Callbacks for delegation back to main controller
         self._on_notes_ready_callback: Optional[Callable] = None
@@ -830,7 +812,7 @@ class PlanningController(QtCore.QObject):
             state["paragraphs_per_chunk"],
             self.view.append_story_content,
             self.view.append_logs,
-            lambda: self._on_chunk_complete(),
+            self._on_chunk_complete,
             self.view.set_waiting,
             self.view.set_stop_enabled,
         )
@@ -915,16 +897,15 @@ class PlanningController(QtCore.QObject):
 
         self.view.set_waiting(False)
 
-        # Check stop flag
-        if self.llm_controller.llm_model.stop_generation:
+        stopped, current_story = self.llm_controller.finalize_chunk_completion(
+            state["chunk_count"],
+            self.view.append_logs,
+            self.view.get_story_content,
+        )
+
+        if stopped:
             self._stop_build()
             return
-
-        self.view.append_logs(f"\n✅ Chunk {state['chunk_count']} complete!\n")
-
-        # Update story
-        current_story = self.view.get_story_content()
-        self.story_model.content = current_story
 
         # Check task completion
         self.view.append_logs("🔍 Checking task completion...\n")
@@ -952,11 +933,18 @@ class PlanningController(QtCore.QObject):
 
         # Check if notes should be regenerated before next chunk
         if self._should_regenerate_notes(current_story):
-            self.view.append_logs("📝 Generating scene notes...\n")
             self.view.set_waiting(True)
-            self.view.prompts_panel.clear_notes()
-            self._generate_notes_for_planning(current_story)
-            return  # Will continue in notes callback
+            self.notes_controller.generate_notes_async(
+                current_story,
+                on_complete=lambda generated_notes, _: self._continue_after_notes(
+                    generated_notes
+                ),
+                on_error=lambda _: self._continue_after_notes(),
+                clear_existing=True,
+                set_waiting_on_start=False,
+                set_waiting_on_finish=False,
+            )
+            return
 
         # Trigger callback if set
         if self._on_chunk_complete_callback:
@@ -1023,85 +1011,22 @@ class PlanningController(QtCore.QObject):
         Returns:
             True if notes should be regenerated
         """
-        import hashlib
-
-        # Only regenerate if auto_notes is enabled and story has content
-        if not self.settings_model.auto_notes or not current_story.strip():
-            return False
-
-        # Check if notes should be regenerated (story changed or notes are LLM-generated)
-        current_story_hash = hashlib.md5(current_story.encode()).hexdigest()
-
-        # Store hash if not set
-        if not hasattr(self, "_last_story_hash_planning"):
-            self._last_story_hash_planning = current_story_hash
-            return True  # First time, generate notes
-
-        # Check if story changed
-        story_changed = self._last_story_hash_planning != current_story_hash
-        self._last_story_hash_planning = current_story_hash
-
-        # Regenerate if story changed or notes should be regenerated
-        return story_changed or self.view.prompts_panel.should_regenerate_notes()
-
-    def _generate_notes_for_planning(self, story_context: str):
-        """Generate notes in background for planning mode.
-
-        Args:
-            story_context: Current story content
-        """
-
-        def generate_in_thread():
-            try:
-                notes_prompt = self.settings_model.notes_prompt_template
-
-                # Define callback for streaming chunks
-                def on_chunk(chunk):
-                    self._notes_signals.notes_chunk.emit(chunk)
-
-                generated_notes, notes_tokens = self.llm_controller.generate_notes(
-                    story_context, notes_prompt, on_chunk
-                )
-
-                # Mark notes as LLM-generated and continue
-                self._notes_signals.notes_ready.emit(generated_notes, notes_tokens)
-
-            except Exception as e:
-                self._notes_signals.notes_error.emit(str(e))
-                traceback.print_exc()
-
-        thread = threading.Thread(target=generate_in_thread, daemon=True)
-        thread.start()
-
-    @QtCore.pyqtSlot(str)
-    def _on_planning_notes_chunk(self, chunk: str):
-        """Handle streaming notes chunk in planning mode."""
-        self.view.prompts_panel.append_notes(chunk)
-
-    @QtCore.pyqtSlot(str, int)
-    def _on_planning_notes_generated(self, generated_notes: str, notes_tokens: int):
-        """Handle notes generation completion in planning mode.
-
-        Args:
-            generated_notes: Generated notes text
-            notes_tokens: Token count
-        """
-        self.view.prompts_panel.mark_notes_as_llm_generated(generated_notes)
-        self.view.append_logs(f"  ✓ Generated {notes_tokens} tokens of notes\n\n")
-        self._continue_after_notes()
-
-    @QtCore.pyqtSlot(str)
-    def _on_planning_notes_error(self, error_msg: str):
-        """Handle notes generation error and continue."""
-        self.view.append_logs(f"❌ Error generating notes: {error_msg}\n")
-        self._continue_after_notes()
+        return self.notes_controller.should_regenerate_notes(
+            current_story,
+            self.settings_model.auto_notes,
+            self.view.notes_panel.should_regenerate_notes(),
+            context_key="planning",
+            first_time_regenerate=True,
+        )
 
     @QtCore.pyqtSlot()
-    def _continue_after_notes(self):
+    def _continue_after_notes(self, generated_notes: str = None):
         """Continue planning build after notes generation."""
+        if generated_notes is not None and self.planning_model.build_state:
+            self.planning_model.build_state["notes"] = generated_notes
+
         self.view.set_waiting(False)
 
-        # Continue to next chunk
         if self._on_chunk_complete_callback:
             self._on_chunk_complete_callback()
         else:

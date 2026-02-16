@@ -57,6 +57,10 @@ class LLMPanel(QtWidgets.QWidget):
         self.thinking_text.setAcceptRichText(True)  # Enable rich text for formatting
         self.thinking_text.setPlaceholderText("Message history will appear here...")
         self.thinking_text.installEventFilter(self)
+        self.thinking_text.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
+        self.thinking_text.customContextMenuRequested.connect(
+            self._show_output_context_menu
+        )
         thinking_container_layout.addWidget(self.thinking_text, stretch=1)
 
         thinking_container.setLayout(thinking_container_layout)
@@ -184,8 +188,10 @@ class LLMPanel(QtWidgets.QWidget):
                 self.clear_user_input()
                 return
 
-            # Add to message history
-            self.add_user_message(user_message)
+            if self._in_planning_mode:
+                self.user_message_history.append(user_message)
+            else:
+                self.add_user_message(user_message)
             # Reset history navigation
             self.history_index = -1
             self.current_draft = ""
@@ -292,6 +298,14 @@ class LLMPanel(QtWidgets.QWidget):
         except Exception:
             pass
 
+    def clear_output_display(self):
+        """Clear the output display without clearing saved history."""
+        try:
+            self.thinking_text.clear()
+            self.message_history.clear()
+        except Exception:
+            pass
+
     def apply_font_size(self, size):
         """Apply font size to thinking text."""
         try:
@@ -360,14 +374,6 @@ class LLMPanel(QtWidgets.QWidget):
         else:
             self.wait_progress.hide()
 
-    def set_mode(self, mode):
-        """Set the current mode."""
-        index = self.mode_combo.findText(mode)
-        if index >= 0:
-            self.mode_combo.blockSignals(True)
-            self.mode_combo.setCurrentIndex(index)
-            self.mode_combo.blockSignals(False)
-
     def add_user_message(self, message):
         """Add a user message to the history and display it."""
         self.message_history.append(("user", message))
@@ -383,6 +389,29 @@ class LLMPanel(QtWidgets.QWidget):
         """Clear all message history."""
         self.message_history.clear()
         self.thinking_text.clear()
+
+    def set_normal_conversation(self, conversation):
+        """Load and render normal-mode conversation history.
+
+        Args:
+            conversation: List of {"role": str, "content": str}
+        """
+        self.message_history.clear()
+        self.user_message_history.clear()
+
+        for msg in conversation or []:
+            role = msg.get("role")
+            content = msg.get("content", "")
+            if role == "user":
+                self.user_message_history.append(content)
+
+    def _show_output_context_menu(self, position):
+        """Show context menu for output area."""
+        menu = self.thinking_text.createStandardContextMenu()
+        menu.addSeparator()
+        clear_action = menu.addAction("Clear Output")
+        clear_action.triggered.connect(self.clear_output_display)
+        menu.exec_(self.thinking_text.viewport().mapToGlobal(position))
 
     def _render_message_history(self):
         """Render the message history with formatting."""

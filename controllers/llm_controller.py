@@ -1065,7 +1065,7 @@ class LLMController:
         paragraph_limit,
         append_text_callback,
         append_thinking_callback,
-        render_markdown_callback,
+        on_complete_callback,
         set_waiting_callback,
         set_stop_enabled_callback,
     ):
@@ -1077,7 +1077,7 @@ class LLMController:
             paragraph_limit: Maximum number of paragraphs to generate
             append_text_callback: Callback to append text to view
             append_thinking_callback: Callback to append thinking text to view
-            render_markdown_callback: Callback to render markdown in view
+            on_complete_callback: Callback when chunk generation completes
             set_waiting_callback: Callback to set waiting state
             set_stop_enabled_callback: Callback to enable/disable stop button
         """
@@ -1090,7 +1090,7 @@ class LLMController:
             append_thinking_callback, QtCore.Qt.QueuedConnection
         )
         signals.render_markdown_signal.connect(
-            render_markdown_callback, QtCore.Qt.QueuedConnection
+            on_complete_callback, QtCore.Qt.QueuedConnection
         )
         signals.set_waiting_signal.connect(
             set_waiting_callback, QtCore.Qt.QueuedConnection
@@ -1138,7 +1138,7 @@ class LLMController:
                     "\n⏹️ Stop requested - generation halted.\n"
                 )
             else:
-                # Use signal to trigger markdown rendering on UI thread (only if not stopped)
+                # Use signal to trigger completion callback on UI thread (only if not stopped)
                 signals.render_markdown_signal.emit()
 
         except KeyboardInterrupt as e:
@@ -1165,3 +1165,46 @@ class LLMController:
                 signals.set_waiting_signal.emit(False)
             except Exception:
                 pass
+
+    def finalize_chunk_completion(
+        self,
+        chunk_count,
+        append_logs,
+        get_story_content,
+        set_stop_enabled=None,
+        on_story_updated=None,
+        render_markdown_callback=None,
+        stop_log_lines=None,
+    ):
+        """Handle common chunk completion logging and story updates.
+
+        Args:
+            chunk_count: Current chunk count
+            append_logs: Callback to append log text
+            get_story_content: Callback to get current story content
+            set_stop_enabled: Optional callback to enable/disable stop button
+            on_story_updated: Optional callback invoked with current story
+            render_markdown_callback: Optional callback for markdown rendering on stop
+            stop_log_lines: Optional list of log lines to emit on stop
+
+        Returns:
+            tuple: (stopped: bool, current_story: Optional[str])
+        """
+        if self.llm_model.stop_generation:
+            if stop_log_lines:
+                for line in stop_log_lines:
+                    append_logs(line)
+            if set_stop_enabled:
+                set_stop_enabled(False)
+            if render_markdown_callback:
+                render_markdown_callback()
+            return True, None
+
+        append_logs(f"\n✅ Chunk {chunk_count} complete!\n")
+
+        current_story = get_story_content()
+        self.story_model.content = current_story
+        if on_story_updated:
+            on_story_updated(current_story)
+
+        return False, current_story

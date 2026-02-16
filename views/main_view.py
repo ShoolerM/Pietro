@@ -3,7 +3,7 @@
 from PyQt5 import QtWidgets, QtCore
 
 from views.story_panel import StoryPanel
-from views.prompts_panel import PromptsPanel
+from views.utilities_panel import UtilitiesPanel
 from views.llm_panel import LLMPanel
 from models.stylesheets import PROMPT_DIALOG
 
@@ -86,7 +86,8 @@ class MainView(QtWidgets.QWidget):
 
         # Create panels
         self.story_panel = StoryPanel()
-        self.prompts_panel = PromptsPanel()
+        self.utilities_panel = UtilitiesPanel()
+        self.notes_panel = self.utilities_panel.notes_panel
         self.llm_panel = LLMPanel()
 
         self._init_ui()
@@ -144,7 +145,7 @@ class MainView(QtWidgets.QWidget):
         # Left vertical splitter: Story | Prompts
         left_vertical_splitter = QtWidgets.QSplitter(QtCore.Qt.Vertical)
         left_vertical_splitter.addWidget(self.story_panel)
-        left_vertical_splitter.addWidget(self.prompts_panel)
+        left_vertical_splitter.addWidget(self.utilities_panel)
         left_vertical_splitter.setSizes([500, 300])
 
         # Main horizontal splitter: Left split (story + prompts) | LLM Panel (right)
@@ -211,48 +212,50 @@ class MainView(QtWidgets.QWidget):
         self.llm_panel.model_changed.connect(self.model_changed.emit)
         self.llm_panel.mode_changed.connect(self._on_mode_changed)
 
-        # Prompts panel signals
-        self.prompts_panel.supplemental_refresh_clicked.connect(
+        # Utilities panel signals
+        self.utilities_panel.supplemental_refresh_clicked.connect(
             self.supplemental_refresh_clicked.emit
         )
-        self.prompts_panel.supplemental_add_clicked.connect(
+        self.utilities_panel.supplemental_add_clicked.connect(
             self.supplemental_add_clicked.emit
         )
-        self.prompts_panel.supplemental_file_opened.connect(
+        self.utilities_panel.supplemental_file_opened.connect(
             self.supplemental_file_opened.emit
         )
-        self.prompts_panel.system_refresh_clicked.connect(
+        self.utilities_panel.system_refresh_clicked.connect(
             self.system_refresh_clicked.emit
         )
-        self.prompts_panel.system_add_clicked.connect(self.system_add_clicked.emit)
-        self.prompts_panel.system_file_opened.connect(self.system_file_opened.emit)
-        self.prompts_panel.rag_create_database_clicked.connect(
+        self.utilities_panel.system_add_clicked.connect(self.system_add_clicked.emit)
+        self.utilities_panel.system_file_opened.connect(self.system_file_opened.emit)
+        self.utilities_panel.rag_create_database_clicked.connect(
             self.rag_create_database_clicked.emit
         )
-        self.prompts_panel.rag_add_files_clicked.connect(
+        self.utilities_panel.rag_add_files_clicked.connect(
             self.rag_add_files_clicked.emit
         )
-        self.prompts_panel.rag_database_toggled.connect(self.rag_database_toggled.emit)
-        self.prompts_panel.rag_refresh_clicked.connect(self.rag_refresh_clicked.emit)
-        self.prompts_panel.rag_delete_database_clicked.connect(
+        self.utilities_panel.rag_database_toggled.connect(
+            self.rag_database_toggled.emit
+        )
+        self.utilities_panel.rag_refresh_clicked.connect(self.rag_refresh_clicked.emit)
+        self.utilities_panel.rag_delete_database_clicked.connect(
             self.rag_delete_database_clicked.emit
         )
-        self.prompts_panel.rag_max_chunks_changed.connect(
+        self.utilities_panel.rag_max_chunks_changed.connect(
             self.rag_max_chunks_changed.emit
         )
-        self.prompts_panel.rag_summary_chunk_size_changed.connect(
+        self.utilities_panel.rag_summary_chunk_size_changed.connect(
             self.rag_summary_chunk_size_changed.emit
         )
-        self.prompts_panel.rag_score_threshold_changed.connect(
+        self.utilities_panel.rag_score_threshold_changed.connect(
             self.rag_score_threshold_changed.emit
         )
-        self.prompts_panel.rag_settings_requested.connect(
+        self.utilities_panel.rag_settings_requested.connect(
             self.rag_settings_requested.emit
         )
-        self.prompts_panel.prompt_selections_changed.connect(
+        self.utilities_panel.prompt_selections_changed.connect(
             self.prompt_selections_changed.emit
         )
-        self.prompts_panel.font_size_changed.connect(self.font_size_changed.emit)
+        self.utilities_panel.font_size_changed.connect(self.font_size_changed.emit)
 
     def _toggle_thinking_panel(self):
         """Toggle visibility of the LLM panel."""
@@ -273,9 +276,9 @@ class MainView(QtWidgets.QWidget):
         if not user_input:
             return
 
-        notes = self.prompts_panel.get_notes_text().strip()
-        supp_text = self.prompts_panel.gather_supplemental_text()
-        system_prompt = self.prompts_panel.get_system_prompt_text()
+        notes = self.notes_panel.get_notes_text().strip()
+        supp_text = self.utilities_panel.gather_supplemental_text()
+        system_prompt = self.utilities_panel.get_system_prompt_text()
 
         # Clear the input field after getting the text (message already added to history by LLMPanel)
         self.llm_panel.clear_user_input()
@@ -305,8 +308,12 @@ class MainView(QtWidgets.QWidget):
         self.story_panel.clear_story_content()
 
     def append_logs(self, text):
-        """Append text to LLM Panel."""
-        self.llm_panel.append_logs(text)
+        """Append text to Logs panel."""
+        self.utilities_panel.append_logs(text)
+
+    def append_llm_panel_text(self, text):
+        """Append text to LLM panel output."""
+        self.llm_panel.append_llm_panel_text(text)
 
     def clear_thinking_text(self):
         """Clear LLM Panel."""
@@ -326,7 +333,7 @@ class MainView(QtWidgets.QWidget):
 
     def clear_logs(self):
         """Clear logs panel."""
-        self.prompts_panel.clear_logs()
+        self.utilities_panel.clear_logs()
 
     @QtCore.pyqtSlot(bool)
     def set_waiting(self, waiting):
@@ -365,15 +372,15 @@ class MainView(QtWidgets.QWidget):
 
     def load_supplemental_files(self, files, selected_files=None):
         """Load supplemental files into tree widget."""
-        self.prompts_panel.load_supplemental_files(files, selected_files)
+        self.utilities_panel.load_supplemental_files(files, selected_files)
 
     def load_system_prompt_files(self, files, selected_file=None):
         """Load system prompt files into tree widget."""
-        self.prompts_panel.load_system_prompt_files(files, selected_file)
+        self.utilities_panel.load_system_prompt_files(files, selected_file)
 
     def load_rag_databases(self, databases):
         """Load RAG databases into tree widget."""
-        self.prompts_panel.load_rag_databases(databases)
+        self.utilities_panel.load_rag_databases(databases)
 
     def show_file_chooser(self, title, multiple=False, allow_directory=False):
         """Show file chooser dialog.
@@ -428,7 +435,7 @@ class MainView(QtWidgets.QWidget):
         """Apply font size to all text widgets."""
         self.story_panel.apply_font_size(size)
         self.llm_panel.apply_font_size(size)
-        self.prompts_panel.apply_font_size(size)
+        self.utilities_panel.apply_font_size(size)
 
     def show_rag_settings_dialog(
         self,
@@ -437,7 +444,7 @@ class MainView(QtWidgets.QWidget):
         current_score_threshold=5.0,
     ):
         """Show RAG settings dialog with current values."""
-        return self.prompts_panel.show_rag_settings_dialog(
+        return self.utilities_panel.show_rag_settings_dialog(
             current_max_chunks=current_max_chunks,
             current_summary_chunk_size=current_summary_chunk_size,
             current_score_threshold=current_score_threshold,
