@@ -3,6 +3,7 @@
 import os
 from PyQt5 import QtWidgets, QtCore, QtGui
 import markdown
+from models.stylesheets import ACCEPT_REJECT_BOX, EDIT_ACCEPT_BUTTON, EDIT_REJECT_BUTTON
 from views.search_widget import SearchWidget
 
 
@@ -845,12 +846,8 @@ class StoryPanel(QtWidgets.QWidget):
         reject_btn = QtWidgets.QPushButton("✗ Reject")
 
         # Style buttons
-        accept_btn.setStyleSheet(
-            "background-color: #28a745; color: white; padding: 5px 15px;"
-        )
-        reject_btn.setStyleSheet(
-            "background-color: #dc3545; color: white; padding: 5px 15px;"
-        )
+        accept_btn.setStyleSheet(EDIT_ACCEPT_BUTTON)
+        reject_btn.setStyleSheet(EDIT_REJECT_BUTTON)
 
         layout.addWidget(label)
         layout.addWidget(accept_btn)
@@ -858,7 +855,7 @@ class StoryPanel(QtWidgets.QWidget):
         layout.addStretch()
 
         widget.setLayout(layout)
-        widget.setStyleSheet("background-color: #3c3c3c; border-radius: 3px;")
+        widget.setStyleSheet(ACCEPT_REJECT_BOX)
 
         # Connect buttons
         accept_btn.clicked.connect(self._on_accept_update)

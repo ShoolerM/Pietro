@@ -1,6 +1,7 @@
 """LLM panel view combining thinking process, prompt input, and controls."""
 
 from PyQt5 import QtWidgets, QtCore, QtGui
+from models.stylesheets import PLANNING_MODE
 from views.search_widget import SearchWidget
 from views.custom_widgets import AutoGrowTextEdit
 
@@ -430,9 +431,7 @@ class LLMPanel(QtWidgets.QWidget):
         self._in_planning_mode = enabled
         if enabled:
             self.thinking_label.setText("📋 Planning Mode")
-            self.thinking_label.setStyleSheet(
-                "background-color: #2a4a2a; color: white; padding: 5px; font-weight: bold;"
-            )
+            self.thinking_label.setStyleSheet(PLANNING_MODE)
             self.thinking_text.setStyleSheet("border: 2px solid #4a7a4a;")
         else:
             self.thinking_label.setText("LLM Panel")

@@ -6,6 +6,8 @@ from PyQt5 import QtWidgets, QtCore, QtGui
 import shutil
 import traceback
 
+from models.stylesheets import SYSTEM_PROMPTS, SUPPLEMENTAL_PROMPTS
+
 
 class OrderTrackingTreeWidget(QtWidgets.QTreeWidget):
     """QTreeWidget that emits a signal when items are reordered via drag and drop."""
@@ -1199,16 +1201,7 @@ class PromptsPanel(QtWidgets.QWidget):
         item = self.supp_list.itemAt(position)
 
         menu = QtWidgets.QMenu(self)
-        menu.setStyleSheet("""
-            QMenu {
-                background-color: #2b2b2b;
-                color: #ffffff;
-                border: 1px solid #3d3d3d;
-            }
-            QMenu::item:selected {
-                background-color: #094771;
-            }
-        """)
+        menu.setStyleSheet(SUPPLEMENTAL_PROMPTS)
 
         if item:
             # Context menu for existing item
@@ -1259,16 +1252,7 @@ class PromptsPanel(QtWidgets.QWidget):
         item = self.sys_list.itemAt(position)
 
         menu = QtWidgets.QMenu(self)
-        menu.setStyleSheet("""
-            QMenu {
-                background-color: #2b2b2b;
-                color: #ffffff;
-                border: 1px solid #3d3d3d;
-            }
-            QMenu::item:selected {
-                background-color: #094771;
-            }
-        """)
+        menu.setStyleSheet(SYSTEM_PROMPTS)
 
         if item:
             # Context menu for existing item

@@ -5,6 +5,7 @@ from PyQt5 import QtWidgets, QtCore
 from views.story_panel import StoryPanel
 from views.prompts_panel import PromptsPanel
 from views.llm_panel import LLMPanel
+from models.stylesheets import PROMPT_DIALOG
 
 
 class MainView(QtWidgets.QWidget):
@@ -323,10 +324,6 @@ class MainView(QtWidgets.QWidget):
         """Clear LLM panel message history."""
         self.llm_panel.clear_message_history()
 
-    def append_logs(self, text):
-        """Append text to logs panel."""
-        self.prompts_panel.append_logs(text + "\n")
-
     def clear_logs(self):
         """Clear logs panel."""
         self.prompts_panel.clear_logs()
@@ -492,7 +489,7 @@ class MainView(QtWidgets.QWidget):
 
         # Current URL preview
         url_preview_label = QtWidgets.QLabel()
-        url_preview_label.setStyleSheet("color: #888; font-style: italic;")
+        url_preview_label.setStyleSheet(PROMPT_DIALOG)
 
         def update_url_preview():
             url = f"http://{ip_input.text()}:{port_input.value()}/v1"
@@ -641,7 +638,7 @@ class MainView(QtWidgets.QWidget):
             "The story text will be automatically appended during summarization."
         )
         info_label.setWordWrap(True)
-        info_label.setStyleSheet("color: #888888; font-style: italic;")
+        info_label.setStyleSheet(PROMPT_DIALOG)
         layout.addWidget(info_label)
 
         prompt_edit = QtWidgets.QTextEdit()
@@ -689,7 +686,7 @@ class MainView(QtWidgets.QWidget):
             "clothing, relationships, current actions, etc.). The current story will be provided as context."
         )
         info_label.setWordWrap(True)
-        info_label.setStyleSheet("color: #888888; font-style: italic;")
+        info_label.setStyleSheet(PROMPT_DIALOG)
         layout.addWidget(info_label)
 
         prompt_edit = QtWidgets.QTextEdit()
