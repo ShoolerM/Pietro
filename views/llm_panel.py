@@ -158,8 +158,8 @@ class LLMPanel(QtWidgets.QWidget):
                 self._in_planning_mode
                 and user_message.strip().lower() == "start writing"
             ):
-                # Extract outline and validate it exists
-                outline = self._extract_outline_from_conversation()
+                # Use stored outline (structured) instead of parsing conversation
+                outline = self._current_outline
                 if not outline or not outline.strip():
                     # No valid outline found
                     self.append_llm_panel_text(
@@ -257,6 +257,7 @@ class LLMPanel(QtWidgets.QWidget):
 
     # Public methods
 
+    @QtCore.pyqtSlot(str)
     def append_logs(self, text):
         """Append text to LLM Panel."""
         try:
@@ -516,10 +517,6 @@ class LLMPanel(QtWidgets.QWidget):
         self._planning_conversation = []
         self.clear_thinking_text()
 
-    def set_current_outline(self, outline):
-        """Set the current outline."""
-        self._current_outline = outline
-
     def get_current_outline(self):
         """Get the current outline."""
         return self._current_outline
@@ -538,50 +535,3 @@ class LLMPanel(QtWidgets.QWidget):
         self.clear_thinking_text()
         self.append_logs(f"📋 **Planning Mode Activated**\n\n{welcome_text}\n\n")
         self.append_logs("---\n\n")
-
-    def _extract_outline_from_conversation(self):
-        """Extract the most recent outline from planning conversation.
-
-        Returns:
-            str: The extracted outline or empty string if none found
-        """
-        # Look through conversation in reverse to find most recent outline
-        for msg in reversed(self._planning_conversation):
-            if msg["role"] == "assistant":
-                content = msg["content"]
-                # Look for checklist items
-                lines = content.split("\n")
-                outline_lines = []
-                in_outline = False
-
-                for line in lines:
-                    stripped = line.strip()
-                    # Check for checklist items (with or without leading dash)
-                    if stripped.startswith("- [ ]") or stripped.startswith("- [x]"):
-                        in_outline = True
-                        outline_lines.append(line)
-                    elif stripped.startswith("[ ]") or stripped.startswith("[x]"):
-                        # Fix malformed checklist items missing the dash
-                        in_outline = True
-                        # Add the dash prefix to normalize format
-                        fixed_line = line.replace("[ ]", "- [ ]", 1).replace(
-                            "[x]", "- [x]", 1
-                        )
-                        outline_lines.append(fixed_line)
-                    elif in_outline and (
-                        stripped.startswith("-")
-                        or stripped.startswith("##")
-                        or stripped.startswith("#")
-                    ):
-                        outline_lines.append(line)
-                    elif in_outline and not stripped:
-                        continue  # Allow blank lines in outline
-                    elif in_outline and stripped:
-                        # Non-outline content, stop if we have outline lines
-                        if outline_lines:
-                            break
-
-                if outline_lines:
-                    return "\n".join(outline_lines)
-
-        return self._current_outline or ""

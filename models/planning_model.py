@@ -27,11 +27,12 @@ class OutlinePlotPoint(BaseModel):
 
 
 class StoryOutline(BaseModel):
-    """Complete story outline with plot points and optional discussion.
+    """Complete story outline with plot points, discussion, and suggestions.
 
     Attributes:
         plot_points: List of narrative events in sequence
         discussion: Optional explanatory text or questions about the outline
+        suggestions: Optional list of suggestions after the outline
     """
 
     plot_points: List[OutlinePlotPoint] = Field(
@@ -41,6 +42,10 @@ class StoryOutline(BaseModel):
     discussion: Optional[str] = Field(
         None,
         description="Optional discussion, questions, or explanatory text about the outline (but not the outline itself)",
+    )
+    suggestions: Optional[List[str]] = Field(
+        default_factory=list,
+        description="Optional list of suggestions to improve or extend the outline",
     )
 
 

@@ -631,6 +631,7 @@ class PromptsPanel(QtWidgets.QWidget):
         # Reconnect signal
         self.notes_text.textChanged.connect(self._on_notes_text_changed)
 
+    @QtCore.pyqtSlot(str)
     def append_notes(self, text: str):
         """Append text chunk to notes (for streaming) with throttled markdown rendering.
 
