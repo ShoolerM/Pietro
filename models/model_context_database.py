@@ -219,3 +219,36 @@ def get_all_known_models() -> dict:
         for subcategory, models in subcategories.items():
             flat_db.update(models)
     return flat_db
+
+
+def is_vision_model(model_name: str) -> bool:
+    """Return True if the model is known to support image inputs."""
+    if not model_name:
+        return False
+
+    normalized = normalize_model_name(model_name)
+
+    vision_models = set()
+    for subcategory, models in MODEL_CONTEXT_DATABASE.get(
+        "multimodal_and_vision_llms", {}
+    ).items():
+        vision_models.update(models.keys())
+
+    vision_models.update(
+        {
+            "gpt-4o",
+            "gpt-4-turbo",
+            "gemini-1.5-pro",
+            "claude-3.5-sonnet",
+            "claude-opus-4.6",
+        }
+    )
+
+    if normalized in vision_models:
+        return True
+
+    # Heuristic for common vision naming
+    if "vision" in normalized or "-vl" in normalized or "omni-vl" in normalized:
+        return True
+
+    return False

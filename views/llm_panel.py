@@ -22,6 +22,7 @@ class LLMPanel(QtWidgets.QWidget):
 
     def __init__(self):
         super().__init__()
+        self.setAcceptDrops(True)
         self.search_widget = None
         self.message_history = []  # Store message history as list of (type, text) tuples
         self.user_message_history = []  # Store only user messages for navigation
@@ -29,6 +30,7 @@ class LLMPanel(QtWidgets.QWidget):
             -1
         )  # Current position in history (-1 = current/new message)
         self.current_draft = ""  # Store current unsent message when navigating history
+        self._attached_files = []
 
         # Planning mode state
         self._in_planning_mode = False
@@ -91,9 +93,53 @@ class LLMPanel(QtWidgets.QWidget):
         self.input_field.setPlaceholderText(
             "Type your prompt here. Enter to send, Shift+Enter for newline"
         )
+        self.input_field.setAcceptDrops(False)
         self.input_field.send_signal.connect(self._on_send)
-        self.input_field.installEventFilter(self)  # Install event filter for arrow keys
-        prompt_layout.addWidget(self.input_field)
+        self.input_field.installEventFilter(
+            self
+        )  # Install event filter for arrows + drop
+
+        input_row = QtWidgets.QHBoxLayout()
+        input_row.setContentsMargins(0, 0, 0, 0)
+        input_row.setSpacing(6)
+        input_row.addWidget(self.input_field, stretch=1)
+
+        buttons_container = QtWidgets.QWidget()
+        buttons_layout = QtWidgets.QVBoxLayout()
+        buttons_layout.setContentsMargins(0, 0, 0, 0)
+        buttons_layout.setSpacing(4)
+
+        button_style = (
+            "QPushButton { border: 1px solid rgba(255,255,255,0.2); "
+            "border-radius: 4px; padding: 0px; }"
+            "QPushButton:hover { background: rgba(255,255,255,0.08); }"
+            "QPushButton:pressed { background: rgba(255,255,255,0.16); }"
+        )
+
+        self.attach_button = QtWidgets.QPushButton("+")
+        self.attach_button.setToolTip("Attach files")
+        self.attach_button.setFixedSize(24, 24)
+        self.attach_button.setFlat(True)
+        self.attach_button.setStyleSheet(button_style)
+        self.attach_button.setCursor(QtCore.Qt.PointingHandCursor)
+        self.attach_button.clicked.connect(self._attach_files)
+
+        self.send_button = QtWidgets.QPushButton(">")
+        self.send_button.setToolTip("Send")
+        self.send_button.setFixedSize(24, 24)
+        self.send_button.setFlat(True)
+        self.send_button.setStyleSheet(button_style)
+        self.send_button.setCursor(QtCore.Qt.PointingHandCursor)
+        self.send_button.clicked.connect(self._on_send)
+
+        buttons_layout.addStretch(1)
+        buttons_layout.addWidget(self.attach_button)
+        buttons_layout.addWidget(self.send_button)
+        buttons_layout.addStretch(1)
+        buttons_container.setLayout(buttons_layout)
+
+        input_row.addWidget(buttons_container, stretch=0)
+        prompt_layout.addLayout(input_row)
 
         prompt_container.setLayout(prompt_layout)
         layout.addWidget(prompt_container, stretch=0)
@@ -143,10 +189,29 @@ class LLMPanel(QtWidgets.QWidget):
         # Set size constraints
         self.setMinimumWidth(250)
 
+        # Drag-and-drop overlay (hidden by default)
+        self._drop_overlay = QtWidgets.QLabel(self)
+        self._drop_overlay.setText("Drop image to attach")
+        self._drop_overlay.setAlignment(QtCore.Qt.AlignCenter)
+        self._drop_overlay.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents, True)
+        self._drop_overlay.setStyleSheet(
+            "background: rgba(255,255,255,0.12);"
+            "color: rgba(255,255,255,0.9);"
+            "border: 2px dashed rgba(255,255,255,0.4);"
+            "border-radius: 8px;"
+            "font-size: 14px;"
+        )
+        self._drop_overlay.setGeometry(
+            8, 8, max(0, self.width() - 16), max(0, self.height() - 16)
+        )
+        self._drop_overlay.hide()
+
         # Add Ctrl+F shortcut for search
         self.search_shortcut = QtWidgets.QShortcut(QtGui.QKeySequence("Ctrl+F"), self)
         self.search_shortcut.setContext(QtCore.Qt.WidgetWithChildrenShortcut)
         self.search_shortcut.activated.connect(self._show_search)
+
+        self._update_attachment_ui()
 
     def _show_search(self):
         """Show the search widget."""
@@ -262,6 +327,63 @@ class LLMPanel(QtWidgets.QWidget):
                 return True
         return False
 
+    def dragEnterEvent(self, event):
+        image_paths = self._get_image_paths_from_mime(event.mimeData())
+        if image_paths:
+            self._show_drop_overlay(True)
+            event.acceptProposedAction()
+            return
+        event.ignore()
+
+    def dragMoveEvent(self, event):
+        image_paths = self._get_image_paths_from_mime(event.mimeData())
+        if image_paths:
+            self._show_drop_overlay(True)
+            event.acceptProposedAction()
+            return
+        event.ignore()
+
+    def dragLeaveEvent(self, event):
+        self._show_drop_overlay(False)
+        event.accept()
+
+    def dropEvent(self, event):
+        image_paths = self._get_image_paths_from_mime(event.mimeData())
+        if image_paths:
+            self._add_attachments(image_paths)
+            event.acceptProposedAction()
+        else:
+            if event.mimeData().hasUrls():
+                QtWidgets.QMessageBox.warning(
+                    self,
+                    "Unsupported File",
+                    "Only image files (png/jpg/jpeg) can be dropped here.",
+                )
+                event.acceptProposedAction()
+            else:
+                event.ignore()
+        self._show_drop_overlay(False)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, "_drop_overlay"):
+            margin = 8
+            self._drop_overlay.setGeometry(
+                margin,
+                margin,
+                max(0, self.width() - margin * 2),
+                max(0, self.height() - margin * 2),
+            )
+
+    def _show_drop_overlay(self, show):
+        if not hasattr(self, "_drop_overlay"):
+            return
+        if show:
+            self._drop_overlay.show()
+            self._drop_overlay.raise_()
+        else:
+            self._drop_overlay.hide()
+
     # Public methods
 
     @QtCore.pyqtSlot(str)
@@ -322,6 +444,114 @@ class LLMPanel(QtWidgets.QWidget):
     def clear_user_input(self):
         """Clear user input field."""
         self.input_field.clear()
+
+    def _attach_files(self):
+        """Open file dialog to attach files."""
+        file_paths, _ = QtWidgets.QFileDialog.getOpenFileNames(
+            self,
+            "Attach Files",
+            "",
+            "Text/Docs/Images (*.txt *.md *.json *.yaml *.yml *.csv *.docx *.png *.jpg *.jpeg);;All Files (*.*)",
+        )
+        if not file_paths:
+            return
+
+        added = False
+        newly_added = []
+        for path in file_paths:
+            if self._is_supported_attachment(path):
+                if path not in self._attached_files:
+                    self._attached_files.append(path)
+                    added = True
+                    newly_added.append(path)
+            else:
+                QtWidgets.QMessageBox.warning(
+                    self,
+                    "Unsupported File",
+                    f"{path}\n\nOnly text files and images (png/jpg/jpeg) are supported."
+                    " GIFs and videos are not allowed.",
+                )
+
+        if added:
+            self._update_attachment_ui()
+            self._notify_attachments_added(newly_added)
+
+    def _add_attachments(self, paths):
+        """Add attachments without UI list."""
+        added = False
+        newly_added = []
+        for path in paths:
+            if self._is_supported_attachment(path):
+                if path not in self._attached_files:
+                    self._attached_files.append(path)
+                    added = True
+                    newly_added.append(path)
+        if added:
+            self._update_attachment_ui()
+            self._notify_attachments_added(newly_added)
+        return added
+
+    def _update_attachment_ui(self):
+        count = len(self._attached_files)
+        if count:
+            self.attach_button.setToolTip(f"Attach files ({count} attached)")
+        else:
+            self.attach_button.setToolTip("Attach files")
+
+    def _notify_attachments_added(self, paths):
+        if not paths:
+            return
+        for path in paths:
+            self.append_llm_panel_text(f"Added: {path}\n")
+
+    def _get_image_paths_from_mime(self, mime_data):
+        if not mime_data or not mime_data.hasUrls():
+            return []
+        paths = []
+        for url in mime_data.urls():
+            if url.isLocalFile():
+                path = url.toLocalFile()
+                if self._is_supported_drop_image(path):
+                    paths.append(path)
+        return paths
+
+    def _is_supported_drop_image(self, path):
+        lower = path.lower()
+        return lower.endswith((".png", ".jpg", ".jpeg"))
+
+    def _is_supported_attachment(self, path):
+        lower = path.lower()
+        if lower.endswith((".gif", ".mp4", ".mov", ".avi", ".mkv", ".webm")):
+            return False
+        if lower.endswith(
+            (
+                ".png",
+                ".jpg",
+                ".jpeg",
+                ".docx",
+            )
+        ):
+            return True
+
+        import mimetypes
+
+        mime = mimetypes.guess_type(path)[0] or ""
+        if mime.startswith("text/"):
+            return True
+        if mime in ("application/json", "application/x-yaml", "text/yaml"):
+            return True
+
+        # Fall back to allowing unknown types; they will be validated on read
+        return True
+
+    def get_attached_files(self):
+        """Return list of attached files."""
+        return list(self._attached_files)
+
+    def clear_attachments(self):
+        """Clear all attachments from UI and state."""
+        self._attached_files = []
+        self._update_attachment_ui()
 
     def set_models(self, models):
         """Set available models in the dropdown."""

@@ -1,6 +1,8 @@
 """Main controller that coordinates all components."""
 
 import sys
+import base64
+import mimetypes
 import threading
 from PyQt5 import QtWidgets, QtCore
 
@@ -20,7 +22,7 @@ from controllers.planning_controller import PlanningController
 from controllers.settings_controller import SettingsController
 from controllers.notes_controller import NotesController
 from models.planning_model import PlanningModel
-from models.model_context_database import detect_context_window
+from models.model_context_database import detect_context_window, is_vision_model
 
 from pathlib import Path
 
@@ -207,6 +209,103 @@ class MainController:
         except Exception:
             pass
 
+    def _build_attachments_payload(self, attachments, include_image_base64=True):
+        """Build attachment context and image payloads.
+
+        Returns:
+            Tuple[str, list, list]: (attachments_text, image_payloads, omitted_images)
+        """
+        if not attachments:
+            return "", [], []
+
+        text_exts = {".txt", ".md", ".json", ".yaml", ".yml", ".csv"}
+        image_exts = {".png", ".jpg", ".jpeg"}
+        docx_ext = ".docx"
+        disallowed = {".gif", ".mp4", ".mov", ".avi", ".mkv", ".webm"}
+        max_text_chars = 20000
+        max_image_bytes = 5 * 1024 * 1024
+
+        sections = []
+        image_notes = []
+        image_payloads = []
+        omitted_images = []
+
+        for path in attachments:
+            try:
+                file_path = Path(path)
+                if not file_path.exists():
+                    continue
+                ext = file_path.suffix.lower()
+                if ext in disallowed:
+                    continue
+
+                if ext in image_exts:
+                    data = file_path.read_bytes()
+                    if len(data) > max_image_bytes:
+                        image_notes.append(
+                            f"[Image: {file_path.name}] (omitted: file too large)"
+                        )
+                        omitted_images.append(file_path.name)
+                        continue
+                    b64 = base64.b64encode(data).decode("utf-8")
+                    mime = mimetypes.guess_type(file_path.name)[0] or "image/*"
+                    image_payloads.append(
+                        {
+                            "name": file_path.name,
+                            "mime": mime,
+                            "b64": b64,
+                            "path": str(file_path),
+                        }
+                    )
+                    if include_image_base64:
+                        sections.append(
+                            f"[Image: {file_path.name}]\nMIME: {mime}\nBase64:\n{b64}"
+                        )
+                    else:
+                        image_notes.append(f"[Image attached: {file_path.name}]")
+                    continue
+
+                if ext == docx_ext:
+                    try:
+                        import importlib
+
+                        docx_module = importlib.import_module("docx")
+                        doc = docx_module.Document(str(file_path))
+                        text = "\n".join(p.text for p in doc.paragraphs if p.text)
+                    except Exception:
+                        text = ""
+                elif ext in text_exts:
+                    text = file_path.read_text(encoding="utf-8", errors="replace")
+                else:
+                    mime = mimetypes.guess_type(file_path.name)[0] or ""
+                    if mime.startswith("text/"):
+                        text = file_path.read_text(encoding="utf-8", errors="replace")
+                    else:
+                        try:
+                            text = file_path.read_text(
+                                encoding="utf-8", errors="replace"
+                            )
+                        except Exception:
+                            text = ""
+
+                if text:
+                    if len(text) > max_text_chars:
+                        text = text[:max_text_chars] + "\n...[truncated]"
+                    sections.append(f"[File: {file_path.name}]\n{text}")
+            except Exception:
+                continue
+
+        if image_notes:
+            sections.append("ATTACHED IMAGES:\n" + "\n".join(image_notes))
+
+        if not sections:
+            return "", image_payloads, omitted_images
+        return (
+            "ATTACHED FILES:\n" + "\n\n".join(sections),
+            image_payloads,
+            omitted_images,
+        )
+
     def _condense_prompts_background(self):
         """Condense prompts in background thread to avoid UI blocking."""
         if not hasattr(self, "_pending_condense_context"):
@@ -276,7 +375,12 @@ class MainController:
 
         # Continue with story generation using condensed prompts
         self._continue_send(
-            ctx["user_input"], condensed_notes, condensed_supp, condensed_system
+            ctx["user_input"],
+            condensed_notes,
+            condensed_supp,
+            condensed_system,
+            ctx.get("attachments_text"),
+            ctx.get("image_payloads", []),
         )
 
     def _on_condense_error(self, error_msg):
@@ -289,7 +393,12 @@ class MainController:
             ctx = self._pending_condense_context
             delattr(self, "_pending_condense_context")
             self._continue_send(
-                ctx["user_input"], ctx["notes"], ctx["supp_text"], ctx["system_prompt"]
+                ctx["user_input"],
+                ctx["notes"],
+                ctx["supp_text"],
+                ctx["system_prompt"],
+                ctx.get("attachments_text"),
+                ctx.get("image_payloads", []),
             )
 
     def _handle_notes_ready(self, generated_notes, notes_tokens):
@@ -302,6 +411,8 @@ class MainController:
                 generated_notes,
                 ctx["supp_text"],
                 ctx["system_prompt"],
+                ctx.get("attachments_text"),
+                ctx.get("image_payloads", []),
             )
             return
 
@@ -313,6 +424,7 @@ class MainController:
                 generated_notes,
                 ctx["supp_text"],
                 ctx["system_prompt"],
+                ctx.get("attachments_text"),
             )
             return
 
@@ -404,7 +516,7 @@ class MainController:
             # Model already updated
             pass
 
-    def _on_send(self, user_input, notes, supp_text, system_prompt):
+    def _on_send(self, user_input, notes, supp_text, system_prompt, attachments):
         """Handle send button click with hierarchical chunking and rolling summarization.
 
         Args:
@@ -420,17 +532,43 @@ class MainController:
         except Exception:
             pass
 
+        model_name = self.llm_model.current_model
+        can_see_images = is_vision_model(model_name)
+        attachments_text, image_payloads, omitted_images = (
+            self._build_attachments_payload(
+                attachments, include_image_base64=not can_see_images
+            )
+        )
+
+        if image_payloads and not can_see_images:
+            self.view.append_llm_panel_text(
+                "⚠️ Current model does not support image inputs. "
+                "Select a vision-capable model to analyze images.\n"
+            )
+
+        if omitted_images:
+            max_mb = 5
+            for name in omitted_images:
+                self.view.append_llm_panel_text(
+                    f"⚠️ Image too large to attach: {name} (max {max_mb}MB).\n"
+                )
+
         # Check if in Planning mode
         if self.view.llm_panel.is_planning_mode():
             # Handle planning conversation
-            self._handle_planning_conversation(user_input)
+            self._handle_planning_conversation(user_input, attachments_text)
             return
 
         # Check if Build with Smart Mode is enabled
         if self.settings_model.smart_mode:
             # Trigger auto-build story mode with the user's input and context
             self._on_auto_build_story_requested(
-                user_input, notes, supp_text, system_prompt
+                user_input,
+                notes,
+                supp_text,
+                system_prompt,
+                attachments_text,
+                image_payloads,
             )
             return
 
@@ -449,6 +587,8 @@ class MainController:
                 "notes": notes,
                 "supp_text": supp_text,
                 "system_prompt": system_prompt,
+                "attachments_text": attachments_text,
+                "image_payloads": image_payloads,
             }
 
             self.notes_controller.generate_notes_async(
@@ -462,9 +602,16 @@ class MainController:
             return
 
         # Continue with story generation
-        self._continue_send(user_input, notes, supp_text, system_prompt)
+        self._continue_send(
+            user_input,
+            notes,
+            supp_text,
+            system_prompt,
+            attachments_text,
+            image_payloads,
+        )
 
-    def _handle_planning_conversation(self, user_input):
+    def _handle_planning_conversation(self, user_input, attachments_text):
         """Handle user input during planning mode.
 
         Args:
@@ -487,9 +634,18 @@ class MainController:
             user_input,
             self.view.llm_panel.get_planning_conversation(),
             self.view.llm_panel.get_current_outline(),
+            attachments_text,
         )
 
-    def _continue_send(self, user_input, notes, supp_text, system_prompt):
+    def _continue_send(
+        self,
+        user_input,
+        notes,
+        supp_text,
+        system_prompt,
+        attachments_text,
+        image_payloads,
+    ):
         """Continue with story generation (after notes are ready or if not needed)."""
         # Reset stop flag and enable stop button
         self.llm_model.reset_stop_flag()
@@ -553,6 +709,8 @@ class MainController:
                     "notes": notes,
                     "supp_text": supp_text,
                     "system_prompt": system_prompt,
+                    "attachments_text": attachments_text,
+                    "image_payloads": image_payloads,
                     "supp_tokens": supp_tokens,
                     "system_tokens": system_tokens,
                     "notes_tokens": notes_tokens,
@@ -616,6 +774,8 @@ class MainController:
                 "supp_text": supp_text,
                 "system_prompt": system_prompt,
                 "current_story": current_story,
+                "attachments_text": attachments_text,
+                "image_payloads": image_payloads,
             }
 
             # Process in background thread
@@ -707,6 +867,10 @@ class MainController:
             final_query = final_query + "\n\nAUTHOR'S NOTES (for context):\n" + notes
             self.view.append_logs(f"📝 Including {len(notes)} chars of author notes\n")
 
+        if attachments_text:
+            final_query = final_query + "\n\n" + attachments_text
+            self.view.append_logs("📎 Including attachments context\n")
+
         # Show system prompt info
         if system_prompt:
             self.view.append_logs(
@@ -724,6 +888,7 @@ class MainController:
         self.llm_controller.invoke_llm(
             final_query,
             system_prompt,
+            image_payloads,
             self._on_text_appended,
             self.view.append_llm_panel_text,
             self._on_render_markdown,
@@ -775,6 +940,8 @@ class MainController:
         notes = ctx["notes"]
         supp_text = ctx["supp_text"]
         system_prompt = ctx["system_prompt"]
+        attachments_text = ctx.get("attachments_text")
+        image_payloads = ctx.get("image_payloads", [])
         current_story = ctx["current_story"]
 
         # Build final query
@@ -830,6 +997,10 @@ class MainController:
             final_query = final_query + "\n\nAUTHOR'S NOTES (for context):\n" + notes
             self.view.append_logs(f"📝 Including {len(notes)} chars of author notes\n")
 
+        if attachments_text:
+            final_query = final_query + "\n\n" + attachments_text
+            self.view.append_logs("📎 Including attachments context\n")
+
         # Show system prompt info
         if system_prompt:
             self.view.append_logs(
@@ -847,6 +1018,7 @@ class MainController:
         self.llm_controller.invoke_llm(
             final_query,
             system_prompt,
+            image_payloads,
             self._on_text_appended,
             self.view.append_llm_panel_text,
             self._on_render_markdown,
@@ -1280,7 +1452,12 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
         )
 
     def _on_auto_build_story_requested(
-        self, initial_prompt=None, notes=None, supp_text=None, system_prompt=None
+        self,
+        initial_prompt=None,
+        notes=None,
+        supp_text=None,
+        system_prompt=None,
+        attachments_text=None,
     ):
         """Handle request to automatically build a complete story with iterative RAG and summarization.
 
@@ -1338,6 +1515,7 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
                 "notes": notes,
                 "supp_text": supp_text,
                 "system_prompt": system_prompt,
+                "attachments_text": attachments_text,
             }
 
             self.notes_controller.generate_notes_async(
@@ -1351,9 +1529,13 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
             return
 
         # Continue with auto-build mode
-        self._continue_auto_build(initial_prompt, notes, supp_text, system_prompt)
+        self._continue_auto_build(
+            initial_prompt, notes, supp_text, system_prompt, attachments_text
+        )
 
-    def _continue_auto_build(self, initial_prompt, notes, supp_text, system_prompt):
+    def _continue_auto_build(
+        self, initial_prompt, notes, supp_text, system_prompt, attachments_text
+    ):
         """Continue with auto-build mode (after notes are ready or if not needed)."""
         # Reset stop flag and enable stop button
         self.llm_model.reset_stop_flag()
@@ -1390,6 +1572,7 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
             "notes": notes,
             "supp_text": supp_text,
             "system_prompt": system_prompt,
+            "attachments_text": attachments_text,
             "chunk_count": 0,
             "max_chunks": self.rag_model.max_chunks,
             "paragraphs_per_chunk": 3,
@@ -1582,6 +1765,9 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
 
         if state["supp_text"]:
             query_parts.append(f"Additional instructions:\n{state['supp_text']}\n\n")
+
+        if state.get("attachments_text"):
+            query_parts.append(f"{state['attachments_text']}\n\n")
 
         query_parts.append(f"Initial prompt: {state['initial_prompt']}\n\n")
         query_parts.append(

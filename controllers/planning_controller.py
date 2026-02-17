@@ -61,7 +61,7 @@ class PlanningController(QtCore.QObject):
         self._on_chunk_complete_callback = on_chunk_complete
 
     def handle_planning_message(
-        self, user_input, conversation_history, current_outline
+        self, user_input, conversation_history, current_outline, attachments_text
     ):
         """Handle a planning conversation message without dialog.
 
@@ -71,7 +71,9 @@ class PlanningController(QtCore.QObject):
             current_outline: Current outline state
         """
         # Build context for planning
-        context = self._build_planning_context(user_input, current_outline)
+        context = self._build_planning_context(
+            user_input, current_outline, attachments_text
+        )
 
         # Set waiting state
         self.view.set_waiting(True)
@@ -463,7 +465,7 @@ class PlanningController(QtCore.QObject):
         )
 
     def _build_planning_context(
-        self, user_text: str, current_outline: Optional[str]
+        self, user_text: str, current_outline: Optional[str], attachments_text: str
     ) -> str:
         """Build system context for planning conversation.
 
@@ -555,6 +557,9 @@ class PlanningController(QtCore.QObject):
             system_content += (
                 f"\n\nRELEVANT CONTEXT FROM KNOWLEDGE BASE:\n{rag_context}"
             )
+
+        if attachments_text:
+            system_content += f"\n\nATTACHMENTS:\n{attachments_text}"
 
         return system_content
 

@@ -13,8 +13,8 @@ class MainView(QtWidgets.QWidget):
 
     # Signals for user actions (forwarded from panels)
     send_clicked = QtCore.pyqtSignal(
-        str, str, str, str
-    )  # user_input, notes, supp_text, system_prompt
+        str, str, str, str, list
+    )  # user_input, notes, supp_text, system_prompt, attachments
     undo_clicked = QtCore.pyqtSignal()
     stop_clicked = QtCore.pyqtSignal()
     clear_clicked = QtCore.pyqtSignal()
@@ -279,11 +279,13 @@ class MainView(QtWidgets.QWidget):
         notes = self.notes_panel.get_notes_text().strip()
         supp_text = self.utilities_panel.gather_supplemental_text()
         system_prompt = self.utilities_panel.get_system_prompt_text()
+        attachments = self.llm_panel.get_attached_files()
 
         # Clear the input field after getting the text (message already added to history by LLMPanel)
         self.llm_panel.clear_user_input()
 
-        self.send_clicked.emit(user_input, notes, supp_text, system_prompt)
+        self.send_clicked.emit(user_input, notes, supp_text, system_prompt, attachments)
+        self.llm_panel.clear_attachments()
 
     # === Public API methods for controller interaction ===
 

@@ -8,6 +8,7 @@ from langchain_openai import ChatOpenAI
 from langchain_core.callbacks import StreamingStdOutCallbackHandler
 from langchain_core.messages import SystemMessage, HumanMessage
 from models.story_model import StoryModel
+from models.model_context_database import is_vision_model
 
 
 class StreamingSignals(QtCore.QObject):
@@ -190,6 +191,7 @@ class LLMController:
         self,
         query,
         system_prompt,
+        image_payloads,
         append_text_callback,
         append_thinking_callback,
         render_markdown_callback,
@@ -201,6 +203,7 @@ class LLMController:
         Args:
             query: The query to send to the LLM
             system_prompt: Optional system prompt
+            image_payloads: Optional list of image payloads for vision models
             append_text_callback: Callback to append text to view
             append_thinking_callback: Callback to append thinking text to view
             render_markdown_callback: Callback to render markdown in view
@@ -227,17 +230,18 @@ class LLMController:
 
         thread = threading.Thread(
             target=self._invoke_thread,
-            args=(query, system_prompt, signals),
+            args=(query, system_prompt, image_payloads, signals),
             daemon=True,
         )
         thread.start()
 
-    def _invoke_thread(self, query, system_prompt, signals):
+    def _invoke_thread(self, query, system_prompt, image_payloads, signals):
         """Thread function for LLM invocation.
 
         Args:
             query: The query to send to the LLM
             system_prompt: Optional system prompt
+            image_payloads: Optional list of image payloads for vision models
             signals: StreamingSignals object created in main thread
         """
         try:
@@ -245,14 +249,37 @@ class LLMController:
                 signals, lambda: self.llm_model.stop_generation
             )
 
-            if system_prompt:
-                messages = [
-                    SystemMessage(content=system_prompt),
-                    HumanMessage(content=query),
-                ]
-                self.llm.invoke(messages, config={"callbacks": [streaming_handler]})
+            model_name = self.llm_model.current_model
+            can_see_images = is_vision_model(model_name)
+
+            if image_payloads and can_see_images:
+                content = [{"type": "text", "text": query}]
+                for payload in image_payloads:
+                    data_url = f"data:{payload['mime']};base64,{payload['b64']}"
+                    content.append(
+                        {"type": "image_url", "image_url": {"url": data_url}}
+                    )
+
+                if system_prompt:
+                    messages = [
+                        SystemMessage(content=system_prompt),
+                        HumanMessage(content=content),
+                    ]
+                    self.llm.invoke(messages, config={"callbacks": [streaming_handler]})
+                else:
+                    self.llm.invoke(
+                        [HumanMessage(content=content)],
+                        config={"callbacks": [streaming_handler]},
+                    )
             else:
-                self.llm.invoke(query, config={"callbacks": [streaming_handler]})
+                if system_prompt:
+                    messages = [
+                        SystemMessage(content=system_prompt),
+                        HumanMessage(content=query),
+                    ]
+                    self.llm.invoke(messages, config={"callbacks": [streaming_handler]})
+                else:
+                    self.llm.invoke(query, config={"callbacks": [streaming_handler]})
 
             # Check if stop was requested while we were generating
             if self.llm_model.stop_generation:
