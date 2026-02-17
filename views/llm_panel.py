@@ -31,6 +31,9 @@ class LLMPanel(QtWidgets.QWidget):
         )  # Current position in history (-1 = current/new message)
         self.current_draft = ""  # Store current unsent message when navigating history
         self._attached_files = []
+        self._rag_selected = []
+        self._rag_items = []
+        self._rag_items_collapsed = False
 
         # Planning mode state
         self._in_planning_mode = False
@@ -54,11 +57,16 @@ class LLMPanel(QtWidgets.QWidget):
         self.thinking_label = QtWidgets.QLabel("LLM Panel")
         thinking_container_layout.addWidget(self.thinking_label)
 
-        self.thinking_text = QtWidgets.QTextEdit()
+        self._rag_message_index = None
+
+        self.thinking_text = QtWidgets.QTextBrowser()
         self.thinking_text.setReadOnly(True)
         self.thinking_text.setAcceptRichText(True)  # Enable rich text for formatting
         self.thinking_text.setPlaceholderText("Message history will appear here...")
         self.thinking_text.installEventFilter(self)
+        self.thinking_text.setOpenExternalLinks(False)
+        self.thinking_text.setOpenLinks(False)
+        self.thinking_text.anchorClicked.connect(self._on_thinking_anchor_clicked)
         self.thinking_text.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
         self.thinking_text.customContextMenuRequested.connect(
             self._show_output_context_menu
@@ -217,6 +225,49 @@ class LLMPanel(QtWidgets.QWidget):
         """Show the search widget."""
         if self.search_widget:
             self.search_widget.show_and_focus()
+
+    def set_rag_selection(self, databases):
+        self._rag_selected = list(databases or [])
+
+    def set_rag_items(self, items):
+        self._rag_items = list(items or [])
+        self._rag_items_collapsed = True
+        self._update_rag_items_message()
+
+    def collapse_rag_selection(self):
+        return
+
+    def collapse_rag_items(self):
+        if not self._rag_items:
+            return
+        self._rag_items_collapsed = True
+        self._update_rag_items_message()
+
+    def _update_rag_items_message(self):
+        # Remove existing RAG message if any
+        if self._rag_message_index is not None:
+            try:
+                self.message_history.pop(self._rag_message_index)
+            except Exception:
+                pass
+            self._rag_message_index = None
+
+        if not self._rag_items:
+            self._render_message_history()
+            return
+
+        arrow = ">" if self._rag_items_collapsed else "v"
+        header = f"{arrow} RAG Items ({len(self._rag_items)})"
+        body = "\n".join(f"• {item}" for item in self._rag_items)
+        text = header if self._rag_items_collapsed else f"{header}\n{body}"
+        self.message_history.append(("rag", text))
+        self._rag_message_index = len(self.message_history) - 1
+        self._render_message_history()
+
+    def _on_thinking_anchor_clicked(self, url):
+        if url.toString() == "rag-toggle":
+            self._rag_items_collapsed = not self._rag_items_collapsed
+            self._update_rag_items_message()
 
     def _on_send(self):
         """Handle send signal from input field."""
@@ -619,6 +670,7 @@ class LLMPanel(QtWidgets.QWidget):
         """Clear all message history."""
         self.message_history.clear()
         self.thinking_text.clear()
+        self._rag_message_index = None
 
     def set_normal_conversation(self, conversation):
         """Load and render normal-mode conversation history.
@@ -664,6 +716,21 @@ class LLMPanel(QtWidgets.QWidget):
                     f'<span style="margin-left: 10px; font-style: italic;">{self._escape_html(msg_text)}</span>'
                     f"</div>"
                 )
+            elif msg_type == "rag":
+                parts = msg_text.split("\n", 1)
+                header = parts[0]
+                body = parts[1] if len(parts) > 1 else ""
+                html_parts.append(
+                    f'<div style="margin-bottom: 10px;">'
+                    f'<a href="rag-toggle" style="color: #d9a6ff; font-weight: bold; text-decoration: none;">{self._escape_html(header)}</a>'
+                    f"</div>"
+                )
+                if body and not self._rag_items_collapsed:
+                    html_parts.append(
+                        f'<div style="margin-bottom: 10px; margin-left: 10px; color: #cbb6dd;">'
+                        f"{self._escape_html(body)}"
+                        f"</div>"
+                    )
 
         self.thinking_text.setHtml("".join(html_parts))
         # Scroll to bottom

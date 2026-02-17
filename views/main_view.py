@@ -341,6 +341,9 @@ class MainView(QtWidgets.QWidget):
     def set_waiting(self, waiting):
         """Set waiting state (show/hide progress bar, enable/disable input)."""
         self.llm_panel.set_waiting(waiting)
+        if not waiting:
+            self.llm_panel.collapse_rag_selection()
+            self.llm_panel.collapse_rag_items()
 
     def set_stop_enabled(self, enabled):
         """Enable or disable the stop button (no-op now that buttons are in context menu)."""
@@ -383,6 +386,14 @@ class MainView(QtWidgets.QWidget):
     def load_rag_databases(self, databases):
         """Load RAG databases into tree widget."""
         self.utilities_panel.load_rag_databases(databases)
+
+    def set_rag_selection(self, databases):
+        """Set RAG selection for the LLM panel."""
+        self.llm_panel.set_rag_selection(databases)
+
+    def set_rag_items(self, items):
+        """Set RAG items for the LLM panel."""
+        self.llm_panel.set_rag_items(items)
 
     def show_file_chooser(self, title, multiple=False, allow_directory=False):
         """Show file chooser dialog.

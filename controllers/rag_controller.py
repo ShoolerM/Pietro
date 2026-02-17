@@ -174,7 +174,8 @@ class RAGController:
     def _on_rag_model_changed(self, event_type, data):
         """Handle Smart Model changes."""
         try:
-            self.view.append_logs(f"\n🔔 Smart Model event: {event_type}")
+            if event_type != "selection_changed":
+                self.view.append_logs(f"\n🔔 Smart Model event: {event_type}")
 
             if event_type == "database_created":
                 self.refresh_databases()
@@ -190,6 +191,7 @@ class RAGController:
                     del self._vectorstores[data]
             elif event_type == "selection_changed":
                 self.refresh_databases()
+                self.view.set_rag_selection(data)
         except Exception as e:
             self.view.append_logs(f"\n❌ EXCEPTION in _on_rag_model_changed:")
             self.view.append_logs(f"   Event type: {event_type}")
@@ -456,6 +458,7 @@ class RAGController:
         """Refresh the RAG databases list in view."""
         databases = self.model.get_databases()
         self.view.load_rag_databases(databases)
+        self.view.set_rag_selection(self.model.get_selected_databases())
 
     def toggle_database(self, db_name):
         """Toggle database selection.
@@ -464,11 +467,7 @@ class RAGController:
             db_name: Name of the database
         """
         try:
-            self.view.append_logs(f"Toggling database: {db_name}")
             self.model.toggle_database_selection(db_name)
-            self.view.append_logs(
-                f"  Success - Selected databases: {self.model.get_selected_databases()}"
-            )
         except Exception as e:
             self.view.append_logs(f"Error toggling database '{db_name}': {e}")
             traceback.print_exc()
@@ -550,16 +549,8 @@ class RAGController:
         selected_dbs = self.model.get_selected_databases()
 
         if not selected_dbs:
+            self.view.set_rag_items([])
             return ""
-
-        self.view.append_logs(f"\n{'=' * 80}")
-        self.view.append_logs(
-            f"RAG QUERY: {query[:100]}{'...' if len(query) > 100 else ''}"
-        )
-        self.view.append_logs(f"Selected Databases: {', '.join(selected_dbs)}")
-        self.view.append_logs(f"Token Budget: {max_tokens:,} tokens")
-        self.view.append_logs(f"Adaptive Threshold: Enabled (2.5x best score)")
-        self.view.append_logs(f"{'=' * 80}")
 
         try:
             all_results = []
@@ -591,8 +582,7 @@ class RAGController:
                     traceback.print_exc()
 
             if not all_results:
-                self.view.append_logs(f"\n⚠️  No results found in any database")
-                self.view.append_logs(f"{'=' * 80}\n")
+                self.view.set_rag_items([])
                 return ""
 
             # Deduplicate results based on content
@@ -630,10 +620,7 @@ class RAGController:
                 ]
 
                 if len(filtered_results) < len(all_results):
-                    self.view.append_logs(
-                        f"Adaptive filter: kept {len(filtered_results)}/{len(all_results)} chunks "
-                        f"(threshold: {adaptive_threshold:.4f}, variance: {self.model.score_variance_threshold:.1%})"
-                    )
+                    pass
 
                 # Always keep at least top 3 results regardless of threshold
                 all_results = filtered_results if filtered_results else all_results[:3]
@@ -667,19 +654,10 @@ class RAGController:
                 total_tokens += chunk_tokens
 
             if not selected_chunks:
-                self.view.append_logs(f"\n⚠️  No chunks fit within token budget")
-                self.view.append_logs(f"{'=' * 80}\n")
+                self.view.set_rag_items([])
                 return ""
 
-            self.view.append_logs(f"\n{'=' * 80}")
-            self.view.append_logs(
-                f"✓ Selected {len(selected_chunks)} chunks ({total_tokens:,}/{max_tokens:,} tokens)"
-            )
-            self.view.append_logs(
-                f"  Dynamic K: packed {len(selected_chunks)} from {len(all_results)} candidates"
-            )
-
-            # Log selected chunks
+            rag_items = []
             for idx, (content, score, tokens, truncated) in enumerate(
                 selected_chunks, 1
             ):
@@ -694,11 +672,11 @@ class RAGController:
                         source_file = doc.metadata.get("file_name", "unknown")
                         chunk_idx = doc.metadata.get("chunk_index", "?")
                         break
-                self.view.append_logs(
-                    f"  [{idx}] {source_file} (chunk {chunk_idx}): {tokens:,} tokens, score: {score:.4f}{trunc_marker}"
+                rag_items.append(
+                    f"{source_file} (chunk {chunk_idx}) — score: {score:.4f}{trunc_marker}"
                 )
 
-            self.view.append_logs(f"{'=' * 80}\n")
+            self.view.set_rag_items(rag_items)
 
             # Combine results
             context = "\n\n---\n\n".join(

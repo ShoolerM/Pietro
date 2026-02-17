@@ -194,6 +194,10 @@ class MainController:
 
         # Load initial RAG databases
         self.rag_controller.refresh_databases()
+        try:
+            self.view.set_rag_selection(self.rag_model.get_selected_databases())
+        except Exception:
+            pass
 
         # Sync summarize prompts toggle UI
         try:
