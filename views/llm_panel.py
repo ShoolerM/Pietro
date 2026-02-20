@@ -164,12 +164,12 @@ class LLMPanel(QtWidgets.QWidget):
 
         # Mode dropdown (no label)
         self.mode_combo = QtWidgets.QComboBox()
-        self.mode_combo.addItems(["Write", "Ask", "Planning", "Story Mode"])
+        self.mode_combo.addItems(["Ask", "Planning", "Story Mode", "Write"])
         self.mode_combo.setToolTip(
-            "Write: Story continuation mode\n"
             "Ask: Chat and Q&A mode\n"
             "Planning: Open planning dialog\n"
             "Story Mode: Continuous writing with RAG (N chunks)"
+            "Write: Story continuation mode\n"
         )
         self.mode_combo.currentTextChanged.connect(
             lambda text: self.mode_changed.emit(text)
