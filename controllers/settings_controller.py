@@ -90,29 +90,34 @@ class SettingsController:
         result = self.view.show_inference_settings_dialog(
             current_ip=self.settings_model.inference_ip,
             current_port=self.settings_model.inference_port,
+            current_api_key=self.settings_model.api_key,
         )
 
         if not result:
             return
 
-        ip, port = result
+        ip, port, api_key = result
 
         test_url = f"http://{ip}:{port}/v1"
         self.view.append_logs(f"Testing connection to: {test_url}")
 
         old_url = self.llm_model.base_url
+        old_key = self.llm_model.api_key
         self.llm_model.base_url = test_url
+        self.llm_model.api_key = api_key
 
         success, result_data = self.llm_model.fetch_available_models()
 
         if success:
             self.settings_model.inference_ip = ip
             self.settings_model.inference_port = port
+            self.settings_model.api_key = api_key
             self.settings_model.save_inference_settings()
             self.view.append_logs(f"✓ Inference server updated to: {ip}:{port}")
             self.view.append_logs(f"  Base URL: {self.settings_model.base_url}")
 
             self.llm_model.base_url = self.settings_model.base_url
+            self.llm_model.api_key = self.settings_model.api_key
 
             if self._save_model_profile_callback:
                 self._save_model_profile_callback()
@@ -128,6 +133,7 @@ class SettingsController:
                 self._refresh_models_callback()
         else:
             self.llm_model.base_url = old_url
+            self.llm_model.api_key = old_key
 
             QtWidgets.QMessageBox.critical(
                 self.view,

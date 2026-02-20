@@ -464,7 +464,7 @@ class MainView(QtWidgets.QWidget):
         )
 
     def show_inference_settings_dialog(
-        self, current_ip="192.168.0.1", current_port=1234
+        self, current_ip="192.168.0.1", current_port=1234, current_api_key=""
     ):
         """Show inference server settings dialog."""
         dialog = QtWidgets.QDialog(self)
@@ -484,7 +484,7 @@ class MainView(QtWidgets.QWidget):
         # IP Address
         ip_layout = QtWidgets.QHBoxLayout()
         ip_label = QtWidgets.QLabel("IP Address:")
-        ip_label.setMinimumWidth(80)
+        ip_label.setMinimumWidth(100)
         ip_layout.addWidget(ip_label)
 
         ip_input = QtWidgets.QLineEdit()
@@ -496,7 +496,7 @@ class MainView(QtWidgets.QWidget):
         # Port
         port_layout = QtWidgets.QHBoxLayout()
         port_label = QtWidgets.QLabel("Port:")
-        port_label.setMinimumWidth(80)
+        port_label.setMinimumWidth(100)
         port_layout.addWidget(port_label)
 
         port_input = QtWidgets.QSpinBox()
@@ -506,6 +506,18 @@ class MainView(QtWidgets.QWidget):
         port_layout.addWidget(port_input)
         port_layout.addStretch()
         layout.addLayout(port_layout)
+
+        # API Key
+        api_layout = QtWidgets.QHBoxLayout()
+        api_label = QtWidgets.QLabel("API Key:")
+        api_label.setMinimumWidth(100)
+        api_layout.addWidget(api_label)
+
+        api_input = QtWidgets.QLineEdit()
+        api_input.setPlaceholderText("Optional")
+        api_input.setText(current_api_key or "")
+        api_layout.addWidget(api_input)
+        layout.addLayout(api_layout)
 
         # Current URL preview
         url_preview_label = QtWidgets.QLabel()
@@ -535,7 +547,8 @@ class MainView(QtWidgets.QWidget):
         if dialog.exec_() == QtWidgets.QDialog.Accepted:
             ip = ip_input.text().strip()
             port = port_input.value()
-            return (ip, port)
+            api_key = api_input.text().strip()
+            return (ip, port, api_key)
 
         return None
 

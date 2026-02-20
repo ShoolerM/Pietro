@@ -47,7 +47,9 @@ class MainController:
         self.story_model = StoryModel()
         self.prompt_model = PromptModel()
         self.llm_model = LLMModel(
-            self.settings_model.base_url, self.settings_model.temperature
+            self.settings_model.base_url,
+            self.settings_model.temperature,
+            self.settings_model.api_key,
         )
         self.rag_model = RAGModel()
         self.summary_model = SummaryModel()

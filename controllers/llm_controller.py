@@ -157,6 +157,7 @@ class LLMController:
         # Create LLM instance
         self.llm = ChatOpenAI(
             base_url=self.llm_model.base_url,
+            api_key=self.llm_model.api_key or None,
             streaming=True,
             temperature=self.llm_model.temperature,
         )
@@ -179,6 +180,7 @@ class LLMController:
             try:
                 self.llm = ChatOpenAI(
                     base_url=self.llm_model.base_url,
+                    api_key=self.llm_model.api_key or None,
                     model=model_name,
                     streaming=True,
                     temperature=self.llm_model.temperature,

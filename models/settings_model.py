@@ -14,6 +14,7 @@ class SettingsModel(Observable):
         self._inference_ip = "192.168.0.1"
         self._inference_port = 1234
         self._base_url = f"http://{self._inference_ip}:{self._inference_port}/v1"
+        self._api_key = ""
         self._temperature = 0.7
         self._context_limit = 4096
         self._base_font_size = 10
@@ -371,6 +372,7 @@ class SettingsModel(Observable):
 
                 self._inference_ip = data.get("ip", "192.168.0.1")
                 self._inference_port = data.get("port", 1234)
+                self._api_key = data.get("api_key", "")
                 self._update_base_url()
 
                 print(
@@ -386,7 +388,11 @@ class SettingsModel(Observable):
         settings_file = settings_dir / "inference_settings.json"
 
         try:
-            data = {"ip": self._inference_ip, "port": self._inference_port}
+            data = {
+                "ip": self._inference_ip,
+                "port": self._inference_port,
+                "api_key": self._api_key,
+            }
 
             with open(settings_file, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2)
@@ -398,6 +404,17 @@ class SettingsModel(Observable):
         except Exception as e:
             print(f"⚠ Error saving inference settings: {e}")
             return False
+
+    @property
+    def api_key(self):
+        """Get API key for inference server."""
+        return self._api_key
+
+    @api_key.setter
+    def api_key(self, value):
+        """Set API key for inference server."""
+        self._api_key = value or ""
+        self.notify_observers("api_key_changed", self._api_key)
 
     def save_summary_prompt(self, prompt_text: str):
         """Save the summary prompt to settings/summary_prompt.txt.
