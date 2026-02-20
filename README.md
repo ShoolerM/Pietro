@@ -6,8 +6,11 @@ An intelligent story writing application that combines **LangChain**, **PyQt5**,
 
 ### Core Functionality
 - **Interactive Story Generation**: Collaborate with LLMs to write stories with real-time streaming
+- **Inline Editing**: Highlight selected text, and with Ctrl + R, or via right click menu, ask the LLM to re-word the selection in a context-aware manner.
+- **Ask Mode**: Chat/Q&A mode for questions about Pietro and your selected RAG Database(s)
+- **Write Mode**: Standard story continuation mode. LLM will use RAG, Notes, Story Summarization and write as much as it sees fit.
 - **Planning Mode**: Conversational interface to develop story outlines with the AI, then generate content following structured plot points
-- **Auto-Build Mode**: Automatically generate complete stories with iterative RAG context refresh and intelligent summarization
+- **Story Mode**: Automatically generate stories or chunks of stories with iterative RAG context refresh and intelligent summarization.
 - **Markdown Rendering**: View stories in formatted markdown or edit in plain text
 - **Multi-Model Support**: Compatible with OpenAI and OpenAI-compatible APIs (LM Studio, Ollama, etc.)
 
@@ -31,9 +34,6 @@ An intelligent story writing application that combines **LangChain**, **PyQt5**,
 
 ### Advanced Features
 - **Model Profiles**: Save per-model configurations (context limits, temperature, system prompts)
-- **Structured Output**: Uses JSON schema for reliable outline generation
-- **LLM Panel**: View LLM reasoning and generation metadata
-- **Token Tracking**: Monitor token usage and context limits in real-time
 - **Font Scaling**: Adjustable UI text size with zoom controls
 
 ## Installation
@@ -93,35 +93,53 @@ An intelligent story writing application that combines **LangChain**, **PyQt5**,
 ## Quick Start
 
 ### 1. Configure LLM Connection
-- **File → Settings → General Settings**
-- Enter your API base URL (e.g., `http://localhost:1234/v1` for Your inference server)
+- **Inference → Server Settings...**
+- Enter your API base URL components (IP + port)
+- Optional: set an API key if your server requires it
 - Select your model from the dropdown
 - Adjust temperature and context limit as needed
 
-### 2. Basic Story Writing
+### 2. Choose a Mode
+- **Ask**: Q&A / chat (no story writes)
+- **Write**: Continue the story in the Story panel
+- **Planning**: Build outlines and then generate from them
+- **Story Mode**: Auto-build story with continuous RAG
+
+### 3. Basic Story Writing (Write Mode)
 1. Enter your story prompt in the **User Input** field
 2. Add optional notes or supplemental prompts
 3. Click **Send** or press **Ctrl+Enter**
 4. Story generates with real-time streaming
 
-### 3. Planning Mode
+### 4. Planning Mode
 1. **Tools → Planning Mode** (or **Ctrl+P**)
 2. Chat with the AI to develop your story outline
 3. Request an outline: *"Create a story outline"*
 4. Click **Start Writing** to generate story following the outline
 5. AI generates content for each plot point sequentially
 
-### 4. Auto-Build with RAG
-1. Create a knowledge base (**Tools → RAG: Manage Databases**)
-2. Enable **Build with RAG** (right-click story panel)
+### 5. Story Mode (Auto-Build with RAG)
+1. Create a knowledge base (**RAG → Manage Databases**)
+2. Enable **Story Mode** in the LLM panel
 3. Click **Send** with your initial prompt
 4. AI automatically generates story chunks with continuous RAG queries
 
-### 5. Create Knowledge Bases
-1. **Tools → RAG: Manage Databases**
+### 6. Create Knowledge Bases
+1. **RAG → Manage Databases**
 2. Click **Create New Database**
 3. Add documents (text files, PDFs, or folders)
 4. Knowledge base is indexed with FAISS for semantic search
+
+### 7. Ask Mode Details
+- Ask mode uses a hidden README knowledge base by default to answer questions about the app.
+- Ask mode also includes any RAG databases you have selected in the RAG panel.
+- Ask mode responses render markdown in the LLM panel.
+- Edit the Ask prompt in **Prompts → Ask Prompt** to change assistant behavior.
+
+### 8. Attachments and Drag & Drop
+- Use the **+** button to attach files or images.
+- Drag & drop images onto the LLM panel to attach them.
+- Large images are skipped with a warning.
 
 ## Configuration
 
@@ -130,28 +148,8 @@ Automatically saves per-model settings:
 - Context limit
 - Temperature
 - System prompt
-- Notes template
 - Summarization prompts
-
-## Architecture
-
-Pietro follows an **MVC (Model-View-Controller)** architecture:
-
-```
-Pietro/
-├── base/              # Observable pattern base classes
-├── models/            # Data models (Story, Settings, RAG, LLM, etc.)
-├── views/             # PyQt5 UI components
-├── controllers/       # Business logic and coordination
-│   ├── main_controller.py
-│   ├── planning_controller.py
-│   ├── llm_controller.py
-│   ├── rag_controller.py
-│   └── prompt_controller.py
-├── settings/          # Configuration files
-├── rag_databases/     # FAISS knowledge bases
-└── main.py           # Application entry point
-```
+- Ask prompt
 
 ## Dependencies
 
@@ -174,14 +172,11 @@ See `requirements.txt` or `pyproject.toml` for complete list.
 ### RAG Not Finding Documents
 - Verify documents were ingested successfully
 - Check that knowledge base is activated
-- Ensure sufficient `max_docs` setting in Smart Model
 - Try different search queries
 
 ### Memory Issues
 - Reduce context limit in model settings
-- Enable prompt summarization
 - Clear story history periodically
-- Reduce RAG `max_docs` parameter
 
 ### Generation Stops Unexpectedly
 - Check LLM server logs for errors

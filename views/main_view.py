@@ -49,6 +49,7 @@ class MainView(QtWidgets.QWidget):
     notes_prompt_requested = (
         QtCore.pyqtSignal()
     )  # request to show notes prompt settings
+    ask_prompt_requested = QtCore.pyqtSignal()  # request to show ask prompt settings
     general_settings_requested = (
         QtCore.pyqtSignal()
     )  # request to show general settings dialog
@@ -121,6 +122,8 @@ class MainView(QtWidgets.QWidget):
         notes_prompt_action.triggered.connect(
             lambda: self.notes_prompt_requested.emit()
         )
+        ask_prompt_action = prompts_menu.addAction("Ask Prompt")
+        ask_prompt_action.triggered.connect(lambda: self.ask_prompt_requested.emit())
 
         rag_menu = menu_bar.addMenu("RAG")
         rag_settings_action = rag_menu.addAction("RAG Settings...")
@@ -311,7 +314,7 @@ class MainView(QtWidgets.QWidget):
 
     def append_logs(self, text):
         """Append text to Logs panel."""
-        self.utilities_panel.append_logs(text)
+        self.utilities_panel.append_logs(text + "\n")
 
     def append_llm_panel_text(self, text):
         """Append text to LLM panel output."""
@@ -717,6 +720,52 @@ class MainView(QtWidgets.QWidget):
             "This template is used to automatically generate scene notes before writing. "
             "Should include instructions for what details to extract (characters, motivations, "
             "clothing, relationships, current actions, etc.). The current story will be provided as context."
+        )
+        info_label.setWordWrap(True)
+        info_label.setStyleSheet(PROMPT_DIALOG)
+        layout.addWidget(info_label)
+
+        prompt_edit = QtWidgets.QTextEdit()
+        prompt_edit.setPlainText(current_prompt)
+        layout.addWidget(prompt_edit)
+
+        button_layout = QtWidgets.QHBoxLayout()
+        save_button = QtWidgets.QPushButton("Save")
+        cancel_button = QtWidgets.QPushButton("Cancel")
+        button_layout.addStretch()
+        button_layout.addWidget(save_button)
+        button_layout.addWidget(cancel_button)
+        layout.addLayout(button_layout)
+
+        dialog.setLayout(layout)
+
+        result = {"saved": False, "prompt": None}
+
+        def on_save():
+            result["saved"] = True
+            result["prompt"] = prompt_edit.toPlainText()
+            dialog.accept()
+
+        save_button.clicked.connect(on_save)
+        cancel_button.clicked.connect(dialog.reject)
+
+        dialog.exec_()
+
+        return result["saved"], result["prompt"]
+
+    def show_ask_prompt_dialog(self, current_prompt):
+        """Show ask prompt settings dialog and return new prompt if saved."""
+        dialog = QtWidgets.QDialog(self)
+        dialog.setWindowTitle("Ask Prompt Settings")
+        dialog.resize(600, 400)
+
+        layout = QtWidgets.QVBoxLayout()
+
+        label = QtWidgets.QLabel("Ask Prompt Template:")
+        layout.addWidget(label)
+
+        info_label = QtWidgets.QLabel(
+            "This template is used for Ask mode responses. It should instruct the assistant to be helpful and use available context."
         )
         info_label.setWordWrap(True)
         info_label.setStyleSheet(PROMPT_DIALOG)

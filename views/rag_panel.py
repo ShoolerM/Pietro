@@ -190,11 +190,11 @@ class RagPanel(QtWidgets.QWidget):
 
         layout = QtWidgets.QVBoxLayout()
 
-        max_chunks_group = QtWidgets.QGroupBox("Generated Chunk Amount (Auto-Build)")
+        max_chunks_group = QtWidgets.QGroupBox("Generated Chunk Amount (Story Mode)")
         max_chunks_layout = QtWidgets.QVBoxLayout()
 
         max_chunks_desc = QtWidgets.QLabel(
-            "Number of chunks to generate during auto-build Smart Mode.\nDefault: 10"
+            "Number of chunks to generate during auto-build Story Mode.\nDefault: 10"
         )
         max_chunks_desc.setWordWrap(True)
         max_chunks_layout.addWidget(max_chunks_desc)

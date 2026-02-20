@@ -110,7 +110,7 @@ class RAGModel(Observable):
         except Exception as e:
             print(f"Error saving database metadata: {e}")
 
-    def get_databases(self):
+    def get_databases(self, include_hidden=False):
         """Get list of available databases.
 
         Returns:
@@ -118,10 +118,56 @@ class RAGModel(Observable):
         """
         result = []
         for db_name, metadata in self._databases.items():
+            if metadata.get("hidden") and not include_hidden:
+                continue
             file_count = len(metadata.get("files", []))
             is_selected = db_name in self._selected_databases
             result.append((db_name, file_count, is_selected))
         return result
+
+    def ensure_database(self, db_name, hidden=False):
+        """Ensure a database exists, creating it if necessary.
+
+        Args:
+            db_name: Name for the database
+            hidden: Whether to mark as hidden
+
+        Returns:
+            tuple: (created: bool, db_name: str)
+        """
+        if db_name not in self._databases:
+            self._databases[db_name] = {
+                "files": [],
+                "path": str(self.rag_dir / db_name),
+                "hidden": bool(hidden),
+                "meta": {},
+            }
+
+            db_path = self.rag_dir / db_name
+            db_path.mkdir(exist_ok=True)
+
+            self._save_data()
+            self.notify_observers("database_created", db_name)
+            return True, db_name
+
+        if hidden and not self._databases[db_name].get("hidden"):
+            self._databases[db_name]["hidden"] = True
+            self._save_data()
+
+        return False, db_name
+
+    def get_database_meta(self, db_name, key, default=None):
+        if db_name in self._databases:
+            meta = self._databases[db_name].get("meta", {})
+            return meta.get(key, default)
+        return default
+
+    def set_database_meta(self, db_name, key, value):
+        if db_name not in self._databases:
+            return False
+        self._databases[db_name].setdefault("meta", {})[key] = value
+        self._save_data()
+        return True
 
     def create_database(self, db_name):
         """Create a new RAG database.
@@ -141,7 +187,12 @@ class RAGModel(Observable):
             return False, f"Database '{db_name}' already exists"
 
         # Create database entry
-        self._databases[db_name] = {"files": [], "path": str(self.rag_dir / db_name)}
+        self._databases[db_name] = {
+            "files": [],
+            "path": str(self.rag_dir / db_name),
+            "hidden": False,
+            "meta": {},
+        }
 
         # Create directory for database
         db_path = self.rag_dir / db_name
@@ -152,7 +203,7 @@ class RAGModel(Observable):
 
         return True, db_name
 
-    def add_file_to_database(self, db_name, file_path):
+    def add_file_to_database(self, db_name, file_path, notify=True):
         """Add file metadata to database.
 
         Args:
@@ -172,7 +223,8 @@ class RAGModel(Observable):
 
         self._databases[db_name]["files"].append(file_path_str)
         self._save_data()
-        self.notify_observers("file_added", (db_name, file_path_str))
+        if notify:
+            self.notify_observers("file_added", (db_name, file_path_str))
 
         return True, file_path_str
 

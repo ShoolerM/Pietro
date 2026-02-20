@@ -156,6 +156,9 @@ class MainController:
         self.view.notes_prompt_requested.connect(
             self.settings_controller.on_notes_prompt_requested
         )
+        self.view.ask_prompt_requested.connect(
+            self.settings_controller.on_ask_prompt_requested
+        )
         self.view.general_settings_requested.connect(
             self.settings_controller.on_general_settings_requested
         )
@@ -559,6 +562,11 @@ class MainController:
                     f"⚠️ Image too large to attach: {name} (max {max_mb}MB).\n"
                 )
 
+        current_mode = self.view.llm_panel.get_current_mode()
+        if current_mode == "Ask":
+            self._handle_ask_mode(user_input, attachments_text, image_payloads)
+            return
+
         # Check if in Planning mode
         if self.view.llm_panel.is_planning_mode():
             # Handle planning conversation
@@ -602,7 +610,7 @@ class MainController:
                 on_complete=self._handle_notes_ready,
                 on_error=self._handle_notes_error,
                 clear_existing=True,
-                set_waiting_on_finish=False,
+                set_waiting_on_finish=True,
             )
 
             return
@@ -641,6 +649,58 @@ class MainController:
             self.view.llm_panel.get_planning_conversation(),
             self.view.llm_panel.get_current_outline(),
             attachments_text,
+        )
+
+    def _handle_ask_mode(self, user_input, attachments_text, image_payloads):
+        """Handle Ask mode: chat-only, no story writes or notes generation."""
+        self.llm_model.reset_stop_flag()
+        self.view.set_stop_enabled(True)
+
+        readme_path = Path("README.md")
+        guide_path = Path("models") / "ASK_MODE_GUIDE.md"
+        include_ask_db = readme_path.exists() or guide_path.exists()
+        if include_ask_db:
+            self.rag_controller.ensure_ask_readme_database(
+                readme_path, extra_paths=[guide_path]
+            )
+
+        selected_dbs = self.rag_model.get_selected_databases()
+        if include_ask_db:
+            selected_set = list(dict.fromkeys(selected_dbs + ["__ask_readme__"]))
+        else:
+            selected_set = selected_dbs
+
+        rag_context = self.rag_controller.query_databases(
+            user_input, selected_dbs_override=selected_set, quiet=True
+        )
+
+        final_query = user_input
+        if rag_context:
+            final_query += "\n\nRELEVANT CONTEXT FROM KNOWLEDGE BASE:\n" + rag_context
+
+        if attachments_text:
+            final_query += "\n\n" + attachments_text
+
+        system_prompt = self.settings_model.ask_prompt_template
+
+        self.view.llm_panel.begin_ai_stream()
+
+        def _ask_set_waiting(waiting):
+            self.view.set_waiting(waiting)
+            if not waiting:
+                self.view.llm_panel.end_ai_stream()
+
+        self.view.set_waiting(True)
+
+        self.llm_controller.invoke_llm(
+            final_query,
+            system_prompt,
+            image_payloads,
+            self.view.llm_panel.append_ai_stream,
+            lambda _text: None,
+            lambda: None,
+            _ask_set_waiting,
+            self.view.set_stop_enabled,
         )
 
     def _continue_send(
@@ -1529,7 +1589,7 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
                 on_complete=self._handle_notes_ready,
                 on_error=self._handle_notes_error,
                 clear_existing=True,
-                set_waiting_on_finish=False,
+                set_waiting_on_finish=True,
             )
 
             return
@@ -1860,25 +1920,31 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
 
     def _on_mode_changed(self, mode):
         """Handle mode change from LLM panel."""
-        self.view.append_logs(f"Mode changed to: {mode}")
+        self.view.append_logs(f"Mode changed to: {mode}\n")
 
-        # If Smart Mode is selected, enable smart_mode
-        if mode == "Smart Mode":
+        # If Story Mode is selected, enable smart_mode
+        if mode == "Story Mode":
             if not self.settings_model.smart_mode:
                 self.settings_model.smart_mode = True
                 self.view.set_smart_mode(True)
                 self.view.append_logs(
-                    "✓ Smart Mode enabled (continuous writing with RAG)"
+                    "✓ Story Mode enabled (continuous writing with RAG)"
                 )
             # Disable planning mode if it was active
             self.view.llm_panel.set_planning_mode(False)
-        # If Normal mode, disable smart_mode and planning mode
-        elif mode == "Normal":
+        # If Write mode, disable smart_mode and planning mode
+        elif mode == "Write":
             if self.settings_model.smart_mode:
                 self.settings_model.smart_mode = False
                 self.view.set_smart_mode(False)
-                self.view.append_logs("✓ Normal mode")
+                self.view.append_logs("✓ Write mode")
             # Disable planning mode if it was active
+            self.view.llm_panel.set_planning_mode(False)
+        # If Ask mode, disable smart_mode and planning mode
+        elif mode == "Ask":
+            if self.settings_model.smart_mode:
+                self.settings_model.smart_mode = False
+                self.view.set_smart_mode(False)
             self.view.llm_panel.set_planning_mode(False)
         # If Planning mode, initialize planning
         elif mode == "Planning":
@@ -1942,8 +2008,8 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
         # Disable planning mode in panel (keep conversation visible)
         self.view.llm_panel.set_planning_mode(False)
 
-        # Switch mode selector back to Normal
-        self.view.llm_panel.set_mode("Normal")
+        # Switch mode selector back to Write
+        self.view.llm_panel.set_mode("Write")
 
         # Start outline-driven generation
         self.planning_controller.start_outline_build(

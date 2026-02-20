@@ -12,7 +12,7 @@ class LLMPanel(QtWidgets.QWidget):
     # Signals
     font_size_changed = QtCore.pyqtSignal(int)  # delta
     send_clicked = QtCore.pyqtSignal()
-    mode_changed = QtCore.pyqtSignal(str)  # "Normal", "Planning", "Smart Mode"
+    mode_changed = QtCore.pyqtSignal(str)  # "Write", "Ask", "Planning", "Story Mode"
     model_changed = QtCore.pyqtSignal(str)
     model_refresh_clicked = QtCore.pyqtSignal()
     start_writing_requested = QtCore.pyqtSignal(
@@ -34,6 +34,8 @@ class LLMPanel(QtWidgets.QWidget):
         self._rag_selected = []
         self._rag_items = []
         self._rag_items_collapsed = False
+        self._planning_rag_collapsed = True
+        self._ai_stream_index = None
 
         # Planning mode state
         self._in_planning_mode = False
@@ -58,6 +60,7 @@ class LLMPanel(QtWidgets.QWidget):
         thinking_container_layout.addWidget(self.thinking_label)
 
         self._rag_message_index = None
+        self._ai_stream_index = None
 
         self.thinking_text = QtWidgets.QTextBrowser()
         self.thinking_text.setReadOnly(True)
@@ -161,11 +164,12 @@ class LLMPanel(QtWidgets.QWidget):
 
         # Mode dropdown (no label)
         self.mode_combo = QtWidgets.QComboBox()
-        self.mode_combo.addItems(["Normal", "Planning", "Smart Mode"])
+        self.mode_combo.addItems(["Write", "Ask", "Planning", "Story Mode"])
         self.mode_combo.setToolTip(
-            "Normal: Single response mode\n"
+            "Write: Story continuation mode\n"
+            "Ask: Chat and Q&A mode\n"
             "Planning: Open planning dialog\n"
-            "Smart Mode: Continuous writing with RAG (N chunks)"
+            "Story Mode: Continuous writing with RAG (N chunks)"
         )
         self.mode_combo.currentTextChanged.connect(
             lambda text: self.mode_changed.emit(text)
@@ -232,7 +236,11 @@ class LLMPanel(QtWidgets.QWidget):
     def set_rag_items(self, items):
         self._rag_items = list(items or [])
         self._rag_items_collapsed = True
-        self._update_rag_items_message()
+        if self._in_planning_mode:
+            self._planning_rag_collapsed = True
+            self._render_planning_conversation()
+        else:
+            self._update_rag_items_message()
 
     def collapse_rag_selection(self):
         return
@@ -244,6 +252,8 @@ class LLMPanel(QtWidgets.QWidget):
         self._update_rag_items_message()
 
     def _update_rag_items_message(self):
+        if self._in_planning_mode:
+            return
         # Remove existing RAG message if any
         if self._rag_message_index is not None:
             try:
@@ -268,6 +278,10 @@ class LLMPanel(QtWidgets.QWidget):
         if url.toString() == "rag-toggle":
             self._rag_items_collapsed = not self._rag_items_collapsed
             self._update_rag_items_message()
+            return
+        if url.toString() == "planning-rag-toggle":
+            self._planning_rag_collapsed = not self._planning_rag_collapsed
+            self._render_planning_conversation()
 
     def _on_send(self):
         """Handle send signal from input field."""
@@ -636,7 +650,7 @@ class LLMPanel(QtWidgets.QWidget):
         """Set the current mode.
 
         Args:
-            mode: Mode name ("Normal", "Planning", "Smart Mode")
+            mode: Mode name ("Write", "Ask", "Planning", "Story Mode")
         """
         index = self.mode_combo.findText(mode)
         if index >= 0:
@@ -666,11 +680,32 @@ class LLMPanel(QtWidgets.QWidget):
         self.message_history.append(("ai", message))
         self._render_message_history()
 
+    def begin_ai_stream(self):
+        """Begin streaming an AI message into history."""
+        if self._ai_stream_index is not None:
+            return
+        self.message_history.append(("ai", ""))
+        self._ai_stream_index = len(self.message_history) - 1
+        self._render_message_history()
+
+    def append_ai_stream(self, text):
+        """Append streamed AI text into history."""
+        if self._ai_stream_index is None:
+            self.begin_ai_stream()
+        msg_type, msg_text = self.message_history[self._ai_stream_index]
+        self.message_history[self._ai_stream_index] = (msg_type, msg_text + text)
+        self._render_message_history()
+
+    def end_ai_stream(self):
+        """End streaming AI message."""
+        self._ai_stream_index = None
+
     def clear_message_history(self):
         """Clear all message history."""
         self.message_history.clear()
         self.thinking_text.clear()
         self._rag_message_index = None
+        self._ai_stream_index = None
 
     def set_normal_conversation(self, conversation):
         """Load and render normal-mode conversation history.
@@ -710,12 +745,20 @@ class LLMPanel(QtWidgets.QWidget):
                 )
             elif msg_type == "ai":
                 # AI messages in italic with green color
-                html_parts.append(
-                    f'<div style="margin-bottom: 10px;">'
-                    f'<span style="color: #4eff9e; font-weight: bold;">AI:</span><br>'
-                    f'<span style="margin-left: 10px; font-style: italic;">{self._escape_html(msg_text)}</span>'
-                    f"</div>"
-                )
+                if self.get_current_mode() == "Ask":
+                    html_parts.append(
+                        f'<div style="margin-bottom: 10px;">'
+                        f'<span style="color: #4eff9e; font-weight: bold;">AI:</span><br>'
+                        f'<div style="margin-left: 10px;">{self._render_markdown(msg_text)}</div>'
+                        f"</div>"
+                    )
+                else:
+                    html_parts.append(
+                        f'<div style="margin-bottom: 10px;">'
+                        f'<span style="color: #4eff9e; font-weight: bold;">AI:</span><br>'
+                        f'<span style="margin-left: 10px; font-style: italic;">{self._escape_html(msg_text)}</span>'
+                        f"</div>"
+                    )
             elif msg_type == "rag":
                 parts = msg_text.split("\n", 1)
                 header = parts[0]
@@ -745,6 +788,15 @@ class LLMPanel(QtWidgets.QWidget):
         text = text.replace("'", "&#39;")
         text = text.replace("\n", "<br>")
         return text
+
+    def _render_markdown(self, text):
+        """Render markdown to HTML, fallback to escaped text."""
+        try:
+            import markdown
+
+            return markdown.markdown(text)
+        except Exception:
+            return self._escape_html(text)
 
     # === Planning Mode Methods ===
 
@@ -792,6 +844,23 @@ class LLMPanel(QtWidgets.QWidget):
             html_parts.append(
                 '<div style="font-family: sans-serif; line-height: 1.6;">'
             )
+
+            if self._rag_items:
+                rag_items_text = "\n".join(f"• {item}" for item in self._rag_items)
+                arrow = ">" if self._planning_rag_collapsed else "v"
+                html_parts.append(
+                    '<div style="margin-bottom: 12px;">'
+                    f'<a href="planning-rag-toggle" style="color: #d9a6ff; font-weight: bold; text-decoration: none;">'
+                    f"{self._escape_html(f'{arrow} RAG Items ({len(self._rag_items)})')}"
+                    f"</a>"
+                    "</div>"
+                )
+                if not self._planning_rag_collapsed:
+                    html_parts.append(
+                        f'<div style="margin-bottom: 12px; margin-left: 10px; color: #cbb6dd;">'
+                        f"{self._escape_html(rag_items_text)}"
+                        f"</div>"
+                    )
 
             for msg in self._planning_conversation:
                 role = msg["role"]

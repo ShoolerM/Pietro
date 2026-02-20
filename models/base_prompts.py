@@ -62,3 +62,6 @@ DEFAULT_NOTES_PROMPT = (
     "- Keep it concise but comprehensive - aim for 200-400 words\n"
     "- Organize by character for clarity\n\n"
 )
+
+DEFAULT_ASK_PROMPT = """You are a helpful assistant. Be succinct. Use the information available to answer the user's questions clearly and accurately.
+If you are unsure or the answer is not available, say you don't know and ask a clarifying question. Do not invent details."""

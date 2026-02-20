@@ -115,34 +115,36 @@ class PlanningController(QtCore.QObject):
 
             # Use structured output for outline requests (strict, no parsing fallback)
             if is_outline_request:
-                outline_result = self._request_structured_outline(messages)
-                if outline_result is None:
-                    self._append_planning_error(
-                        "\n\n❌ Failed to generate a valid outline. Please try again.\n\n"
-                    )
-                    return
+                response_buffer = []
 
-                response_text, outline_text = outline_result
-
-                # Display in panel
+                # Add assistant prefix to panel
                 QtCore.QMetaObject.invokeMethod(
                     self.view.llm_panel,
                     "append_llm_panel_text",
                     QtCore.Qt.QueuedConnection,
                     QtCore.Q_ARG(str, "\n**Assistant:** "),
                 )
-                QtCore.QMetaObject.invokeMethod(
-                    self.view.llm_panel,
-                    "append_llm_panel_text",
-                    QtCore.Qt.QueuedConnection,
-                    QtCore.Q_ARG(str, response_text),
-                )
+
+                # Stream response to panel
+                for chunk in self.llm_controller.llm.stream(messages):
+                    token = chunk.content
+                    response_buffer.append(token)
+                    QtCore.QMetaObject.invokeMethod(
+                        self.view.llm_panel,
+                        "append_llm_panel_text",
+                        QtCore.Qt.QueuedConnection,
+                        QtCore.Q_ARG(str, token),
+                    )
+
+                # Add newline after response
                 QtCore.QMetaObject.invokeMethod(
                     self.view.llm_panel,
                     "append_llm_panel_text",
                     QtCore.Qt.QueuedConnection,
                     QtCore.Q_ARG(str, "\n\n"),
                 )
+
+                response_text = "".join(response_buffer)
 
                 # Add to conversation
                 QtCore.QMetaObject.invokeMethod(
@@ -153,19 +155,24 @@ class PlanningController(QtCore.QObject):
                     QtCore.Q_ARG(str, response_text),
                 )
 
-                # Store only the validated outline checklist
-                QtCore.QMetaObject.invokeMethod(
-                    self.view.llm_panel,
-                    "set_current_outline",
-                    QtCore.Qt.QueuedConnection,
-                    QtCore.Q_ARG(str, outline_text),
-                )
-
-                # Save conversation with stored outline
-                self.settings_model.save_planning_conversation(
-                    self.view.llm_panel.get_planning_conversation(),
-                    outline_text,
-                )
+                # Parse structured outline in a follow-up pass
+                outline_result = self._request_structured_outline(messages)
+                if outline_result is not None:
+                    _, outline_text = outline_result
+                    QtCore.QMetaObject.invokeMethod(
+                        self.view.llm_panel,
+                        "set_current_outline",
+                        QtCore.Qt.QueuedConnection,
+                        QtCore.Q_ARG(str, outline_text),
+                    )
+                    self.settings_model.save_planning_conversation(
+                        self.view.llm_panel.get_planning_conversation(),
+                        outline_text,
+                    )
+                else:
+                    self._append_planning_log(
+                        "⚠️ Outline parsing failed; using streamed response only.\n"
+                    )
 
                 return
 
@@ -305,6 +312,22 @@ class PlanningController(QtCore.QObject):
         raw_text = response.content if hasattr(response, "content") else str(response)
         try:
             data = json.loads(raw_text)
+        except Exception:
+            extracted = self._extract_json_from_text(raw_text)
+            if extracted:
+                try:
+                    data = json.loads(extracted)
+                except Exception as e:
+                    self._append_planning_log(
+                        f"❌ JSON outline parse failed: {e}\n↪ Please try again.\n"
+                    )
+                    return None
+            else:
+                self._append_planning_log(
+                    "❌ JSON outline parse failed: empty/invalid response\n↪ Please try again.\n"
+                )
+                return None
+        try:
             result = StoryOutline(**data)
         except Exception as e:
             self._append_planning_log(
@@ -455,6 +478,17 @@ class PlanningController(QtCore.QObject):
             QtCore.Q_ARG(str, error_msg),
         )
 
+    def _stream_text_to_panel(self, text: str, chunk_size: int = 160):
+        """Stream text into the planning panel in small chunks."""
+        for i in range(0, len(text), chunk_size):
+            chunk = text[i : i + chunk_size]
+            QtCore.QMetaObject.invokeMethod(
+                self.view.llm_panel,
+                "append_llm_panel_text",
+                QtCore.Qt.QueuedConnection,
+                QtCore.Q_ARG(str, chunk),
+            )
+
     def _append_planning_log(self, log_msg: str):
         """Append a log message from a background thread safely."""
         QtCore.QMetaObject.invokeMethod(
@@ -463,6 +497,15 @@ class PlanningController(QtCore.QObject):
             QtCore.Qt.QueuedConnection,
             QtCore.Q_ARG(str, log_msg),
         )
+
+    def _extract_json_from_text(self, text: str) -> Optional[str]:
+        if not text:
+            return None
+        start = text.find("{")
+        end = text.rfind("}")
+        if start == -1 or end == -1 or end <= start:
+            return None
+        return text[start : end + 1]
 
     def _build_planning_context(
         self, user_text: str, current_outline: Optional[str], attachments_text: str
@@ -620,6 +663,10 @@ class PlanningController(QtCore.QObject):
 
         # Save history
         self.story_model.save_to_history()
+
+        # Ensure story panel is in plain text mode for streaming
+        current_story = self.view.get_story_content()
+        self.view.set_story_content(current_story)
 
         # Start first chunk
         self.generate_next_chunk()
@@ -938,7 +985,6 @@ class PlanningController(QtCore.QObject):
 
         # Check if notes should be regenerated before next chunk
         if self._should_regenerate_notes(current_story):
-            self.view.set_waiting(True)
             self.notes_controller.generate_notes_async(
                 current_story,
                 on_complete=lambda generated_notes, _: self._continue_after_notes(
@@ -946,8 +992,8 @@ class PlanningController(QtCore.QObject):
                 ),
                 on_error=lambda _: self._continue_after_notes(),
                 clear_existing=True,
-                set_waiting_on_start=False,
-                set_waiting_on_finish=False,
+                set_waiting_on_start=True,
+                set_waiting_on_finish=True,
             )
             return
 

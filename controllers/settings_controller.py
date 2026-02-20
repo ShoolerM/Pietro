@@ -46,6 +46,17 @@ class SettingsController:
             if not success:
                 self.view.show_warning("Save Error", "Failed to save notes prompt")
 
+    def on_ask_prompt_requested(self):
+        """Handle ask prompt settings menu action."""
+        saved, new_prompt = self.view.show_ask_prompt_dialog(
+            self.settings_model.ask_prompt_template
+        )
+
+        if saved and new_prompt is not None:
+            success = self.settings_model.save_ask_prompt(new_prompt)
+            if not success:
+                self.view.show_warning("Save Error", "Failed to save ask prompt")
+
     def on_general_settings_requested(self):
         """Handle general settings menu action."""
         result = self.view.show_general_settings_dialog(

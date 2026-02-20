@@ -26,6 +26,7 @@ class SettingsModel(Observable):
         self._render_markdown = True  # Render story as markdown by default
         self._summary_prompt_template = base_prompts.DEFAULT_SUMMARY_PROMPT
         self._notes_prompt_template = base_prompts.DEFAULT_NOTES_PROMPT
+        self._ask_prompt_template = base_prompts.DEFAULT_ASK_PROMPT
         self._planning_prompt_template = "What story would you like to plan?"
 
         # Per-model profile settings
@@ -42,6 +43,7 @@ class SettingsModel(Observable):
         self._load_inference_settings()
         self._load_summary_prompt()
         self._load_notes_prompt()
+        self._load_ask_prompt()
         self._load_prompt_selections()
         self._load_smart_mode()
         self._load_render_markdown()
@@ -360,6 +362,25 @@ class SettingsModel(Observable):
         except Exception as e:
             print(f"⚠ Error loading notes prompt: {e}. Using default.")
 
+    def _load_ask_prompt(self):
+        """Load the ask prompt from settings/ask_prompt.txt or use default."""
+        settings_dir = Path("settings")
+        prompt_file = settings_dir / "ask_prompt.txt"
+
+        try:
+            if prompt_file.exists():
+                with open(prompt_file, "r", encoding="utf-8") as f:
+                    self._ask_prompt_template = f.read()
+                print(
+                    f"✓ Loaded custom ask prompt from {prompt_file} ({len(self._ask_prompt_template)} chars)"
+                )
+            else:
+                print(
+                    f"Using default ask prompt ({len(self._ask_prompt_template)} chars)"
+                )
+        except Exception as e:
+            print(f"⚠ Error loading ask prompt: {e}. Using default.")
+
     def _load_inference_settings(self):
         """Load inference server settings from file."""
         settings_dir = Path("settings")
@@ -463,6 +484,35 @@ class SettingsModel(Observable):
         except Exception as e:
             print(f"⚠ Error saving notes prompt: {e}")
             return False
+
+    def save_ask_prompt(self, prompt_text: str):
+        """Save the ask prompt to settings/ask_prompt.txt.
+
+        Args:
+            prompt_text: The prompt text to save
+
+        Returns:
+            bool: True if save was successful, False otherwise
+        """
+        settings_dir = Path("settings")
+        settings_dir.mkdir(exist_ok=True)
+        prompt_file = settings_dir / "ask_prompt.txt"
+
+        try:
+            with open(prompt_file, "w", encoding="utf-8") as f:
+                f.write(prompt_text)
+            print(f"✓ Saved ask prompt to {prompt_file} ({len(prompt_text)} chars)")
+            self._ask_prompt_template = prompt_text
+            self.notify_observers("ask_prompt_saved", prompt_text)
+            return True
+        except Exception as e:
+            print(f"⚠ Error saving ask prompt: {e}")
+            return False
+
+    @property
+    def ask_prompt_template(self):
+        """Get ask prompt template."""
+        return self._ask_prompt_template
 
     def _load_prompt_selections(self):
         """Load saved prompt selections from file."""

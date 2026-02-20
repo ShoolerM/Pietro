@@ -29,6 +29,7 @@ class RAGController:
         """
         self.model = rag_model
         self.view = view
+        self._ask_db_name = "__ask_readme__"
 
         # Lazy-loaded components
         self._embeddings = None
@@ -40,37 +41,42 @@ class RAGController:
         # Register model observers
         self.model.add_observer(self._on_rag_model_changed)
 
-    def _init_components(self):
+    def _init_components(self, quiet=False):
         """Lazy-initialize FAISS components."""
         if self._embeddings is not None:
             return
 
         try:
-            self.view.append_logs("Initializing RAG components...")
+            if not quiet:
+                self.view.append_logs("Initializing RAG components...")
 
             # Get database path from model
             rag_dir = Path(self.model.rag_dir)
             rag_dir.mkdir(exist_ok=True)
 
-            self.view.append_logs(f"  RAG storage: {rag_dir}")
-            self.view.append_logs("  Loading embedding model...")
+            if not quiet:
+                self.view.append_logs(f"  RAG storage: {rag_dir}")
+                self.view.append_logs("  Loading embedding model...")
 
             # Initialize embeddings (using a lightweight model)
             self._embeddings = HuggingFaceEmbeddings(
                 model_name="all-MiniLM-L6-v2", model_kwargs={"device": "cpu"}
             )
 
-            self.view.append_logs("  ✓ Embedding model loaded")
+            if not quiet:
+                self.view.append_logs("  ✓ Embedding model loaded")
 
             # Initialize text splitter
             self._text_splitter = RecursiveCharacterTextSplitter(
                 chunk_size=1000, chunk_overlap=200, length_function=len
             )
 
-            self.view.append_logs("✓ RAG components initialized\n")
+            if not quiet:
+                self.view.append_logs("✓ RAG components initialized\n")
 
         except Exception as e:
-            self.view.append_logs(f"❌ Error initializing RAG components: {e}")
+            if not quiet:
+                self.view.append_logs(f"❌ Error initializing RAG components: {e}")
             traceback.print_exc()
             self.view.show_warning(
                 "RAG Error",
@@ -209,7 +215,9 @@ class RAGController:
         # Call the new method with no progress dialog
         self._ingest_file_with_progress(db_name, file_path, None)
 
-    def _ingest_file_with_progress(self, db_name, file_path, progress=None):
+    def _ingest_file_with_progress(
+        self, db_name, file_path, progress=None, quiet=False
+    ):
         """Ingest a file into the database with optional progress reporting.
 
         Args:
@@ -220,9 +228,10 @@ class RAGController:
 
         def log(msg):
             """Helper to log to both console and progress dialog."""
-            self.view.append_logs(msg)
-            if progress:
-                progress.append_detail(msg)
+            if not quiet:
+                self.view.append_logs(msg)
+                if progress:
+                    progress.append_detail(msg)
 
         try:
             log(f"\n{'=' * 80}")
@@ -232,7 +241,7 @@ class RAGController:
             log(f"{'=' * 80}")
 
             log("Step 1: Initializing components...")
-            self._init_components()
+            self._init_components(quiet=quiet)
 
             if self._embeddings is None:
                 log("❌ Embeddings model is None after initialization!")
@@ -460,6 +469,69 @@ class RAGController:
         self.view.load_rag_databases(databases)
         self.view.set_rag_selection(self.model.get_selected_databases())
 
+    def ensure_ask_readme_database(self, readme_path, extra_paths=None):
+        """Ensure hidden Ask docs database exists and is up to date."""
+        try:
+            paths = [readme_path]
+            if extra_paths:
+                paths.extend(list(extra_paths))
+
+            existing_paths = [p for p in paths if p and p.exists()]
+            if not existing_paths:
+                return False
+
+            self.model.ensure_database(self._ask_db_name, hidden=True)
+
+            files = self.model.get_database_files(self._ask_db_name)
+            changed = False
+
+            for path in existing_paths:
+                path_str = str(path.resolve())
+                mtime_key = f"mtime:{path.name}"
+                mtime_val = path.stat().st_mtime
+                stored_mtime = self.model.get_database_meta(
+                    self._ask_db_name, mtime_key
+                )
+
+                if path_str not in files:
+                    self.model.add_file_to_database(
+                        self._ask_db_name, path_str, notify=False
+                    )
+                    changed = True
+
+                if stored_mtime is None or mtime_val > stored_mtime:
+                    changed = True
+
+            if not changed:
+                return False
+
+            try:
+                vectorstore_path = self._get_vectorstore_path(self._ask_db_name)
+                index_file = vectorstore_path
+                pkl_file = vectorstore_path.parent / f"{self._ask_db_name}.pkl"
+
+                if index_file.exists():
+                    index_file.unlink()
+                if pkl_file.exists():
+                    pkl_file.unlink()
+                if self._ask_db_name in self._vectorstores:
+                    del self._vectorstores[self._ask_db_name]
+            except Exception:
+                pass
+
+            for path in existing_paths:
+                path_str = str(path.resolve())
+                self._ingest_file_with_progress(
+                    self._ask_db_name, path_str, progress=None, quiet=True
+                )
+                self.model.set_database_meta(
+                    self._ask_db_name, f"mtime:{path.name}", path.stat().st_mtime
+                )
+
+            return True
+        except Exception:
+            return False
+
     def toggle_database(self, db_name):
         """Toggle database selection.
 
@@ -522,7 +594,9 @@ class RAGController:
             traceback.print_exc()
             self.view.show_warning("Delete Error", f"Failed to delete database:\n{e}")
 
-    def query_databases(self, query, max_tokens=None):
+    def query_databases(
+        self, query, max_tokens=None, selected_dbs_override=None, quiet=False
+    ):
         """Query selected databases for relevant context using dynamic K.
 
         Uses greedy packing: retrieves chunks sorted by relevance and adds them
@@ -537,7 +611,7 @@ class RAGController:
         """
         from models.story_model import StoryModel
 
-        self._init_components()
+        self._init_components(quiet=quiet)
 
         if self._embeddings is None:
             return ""
@@ -546,7 +620,11 @@ class RAGController:
         if max_tokens is None:
             max_tokens = 2000
 
-        selected_dbs = self.model.get_selected_databases()
+        selected_dbs = (
+            list(selected_dbs_override)
+            if selected_dbs_override is not None
+            else self.model.get_selected_databases()
+        )
 
         if not selected_dbs:
             self.view.set_rag_items([])
@@ -562,9 +640,10 @@ class RAGController:
             for db_name in selected_dbs:
                 vectorstore = self._load_vectorstore(db_name)
                 if not vectorstore:
-                    self.view.append_logs(
-                        f"  ⚠️  Database '{db_name}' not found or empty"
-                    )
+                    if db_name != self._ask_db_name:
+                        self.view.append_logs(
+                            f"  ⚠️  Database '{db_name}' not found or empty"
+                        )
                     continue
 
                 try:
@@ -578,8 +657,11 @@ class RAGController:
                             all_results.append((doc, score))
 
                 except Exception as e:
-                    self.view.append_logs(f"Error querying database '{db_name}': {e}")
-                    traceback.print_exc()
+                    if db_name != self._ask_db_name:
+                        self.view.append_logs(
+                            f"Error querying database '{db_name}': {e}"
+                        )
+                        traceback.print_exc()
 
             if not all_results:
                 self.view.set_rag_items([])

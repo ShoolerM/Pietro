@@ -10,7 +10,7 @@ class BottomControlPanel(QtWidgets.QWidget):
 
     # Signals
     send_clicked = QtCore.pyqtSignal()
-    mode_changed = QtCore.pyqtSignal(str)  # "Normal", "Planning", "Smart Mode"
+    mode_changed = QtCore.pyqtSignal(str)  # "Write", "Ask", "Planning", "Story Mode"
     model_changed = QtCore.pyqtSignal(str)
     model_refresh_clicked = QtCore.pyqtSignal()
 
@@ -41,11 +41,12 @@ class BottomControlPanel(QtWidgets.QWidget):
         mode_layout.addWidget(mode_label)
 
         self.mode_combo = QtWidgets.QComboBox()
-        self.mode_combo.addItems(["Normal", "Planning", "Smart Mode"])
+        self.mode_combo.addItems(["Write", "Ask", "Planning", "Story Mode"])
         self.mode_combo.setToolTip(
-            "Normal: Single response mode\n"
+            "Write: Story continuation mode\n"
+            "Ask: Chat and Q&A mode\n"
             "Planning: Open planning dialog\n"
-            "Smart Mode: Continuous writing with RAG (N chunks)"
+            "Story Mode: Continuous writing with RAG (N chunks)"
         )
         self.mode_combo.currentTextChanged.connect(
             lambda text: self.mode_changed.emit(text)

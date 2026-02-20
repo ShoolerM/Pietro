@@ -244,9 +244,7 @@ class StoryPanel(QtWidgets.QWidget):
         menu.addSeparator()
 
         # Build with RAG toggle
-        build_rag_text = (
-            "Build with RAG: ON" if self._smart_mode else "Build with RAG: OFF"
-        )
+        build_rag_text = "Story Mode: ON" if self._smart_mode else "Story Mode: OFF"
         build_rag_action = menu.addAction(build_rag_text)
         build_rag_action.triggered.connect(
             lambda: self.toggle_smart_mode_requested.emit()

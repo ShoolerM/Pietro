@@ -92,8 +92,16 @@ class NotesController:
         if log_start:
             self.view.append_logs("📝 Generating scene notes...\n")
 
+        def _set_waiting(waiting):
+            QtCore.QMetaObject.invokeMethod(
+                self.view,
+                "set_waiting",
+                QtCore.Qt.QueuedConnection,
+                QtCore.Q_ARG(bool, waiting),
+            )
+
         if set_waiting_on_start:
-            self.view.set_waiting(True)
+            _set_waiting(True)
 
         signals = NotesSignals()
 
@@ -115,14 +123,14 @@ class NotesController:
             if on_complete:
                 on_complete(generated_notes, notes_tokens)
             if set_waiting_on_finish:
-                self.view.set_waiting(False)
+                _set_waiting(False)
 
         def on_error_internal(error_msg):
             default_error_handler(error_msg)
             if on_error:
                 on_error(error_msg)
             if set_waiting_on_finish:
-                self.view.set_waiting(False)
+                _set_waiting(False)
 
         signals.notes_chunk.connect(on_chunk, QtCore.Qt.QueuedConnection)
         signals.notes_ready.connect(on_ready, QtCore.Qt.QueuedConnection)
