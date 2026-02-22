@@ -225,6 +225,23 @@ MAIN_STYLE = """
         }
 """
 
+LLM_PANEL_BUTTON_STYLE = (
+    "QPushButton { border: 1px solid rgba(255,255,255,0.2); "
+    "border-radius: 4px; padding: 0px; }"
+    "QPushButton:hover { background: rgba(255,255,255,0.08); }"
+    "QPushButton:pressed { background: rgba(255,255,255,0.16); }"
+)
+
+LLM_PANEL_CONTROL_BAR_STYLE = "background: transparent;"
+
+LLM_PANEL_DROP_OVERLAY_STYLE = (
+    "background: rgba(255,255,255,0.12);"
+    "color: rgba(255,255,255,0.9);"
+    "border: 2px dashed rgba(255,255,255,0.4);"
+    "border-radius: 8px;"
+    "font-size: 14px;"
+)
+
 PROMPT_DIALOG = """color: #888888; font-style: italic;"""
 
 

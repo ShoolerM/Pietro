@@ -117,14 +117,6 @@ class PlanningController(QtCore.QObject):
             if is_outline_request:
                 response_buffer = []
 
-                # Add assistant prefix to panel
-                QtCore.QMetaObject.invokeMethod(
-                    self.view.llm_panel,
-                    "append_llm_panel_text",
-                    QtCore.Qt.QueuedConnection,
-                    QtCore.Q_ARG(str, "\n**Assistant:** "),
-                )
-
                 # Stream response to panel
                 for chunk in self.llm_controller.llm.stream(messages):
                     token = chunk.content

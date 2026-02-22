@@ -1,7 +1,12 @@
 """LLM panel view combining thinking process, prompt input, and controls."""
 
 from PyQt5 import QtWidgets, QtCore, QtGui
-from models.stylesheets import PLANNING_MODE
+from models.stylesheets import (
+    PLANNING_MODE,
+    LLM_PANEL_BUTTON_STYLE,
+    LLM_PANEL_CONTROL_BAR_STYLE,
+    LLM_PANEL_DROP_OVERLAY_STYLE,
+)
 from views.search_widget import SearchWidget
 from views.custom_widgets import AutoGrowTextEdit
 
@@ -120,18 +125,11 @@ class LLMPanel(QtWidgets.QWidget):
         buttons_layout.setContentsMargins(0, 0, 0, 0)
         buttons_layout.setSpacing(4)
 
-        button_style = (
-            "QPushButton { border: 1px solid rgba(255,255,255,0.2); "
-            "border-radius: 4px; padding: 0px; }"
-            "QPushButton:hover { background: rgba(255,255,255,0.08); }"
-            "QPushButton:pressed { background: rgba(255,255,255,0.16); }"
-        )
-
         self.attach_button = QtWidgets.QPushButton("+")
         self.attach_button.setToolTip("Attach files")
         self.attach_button.setFixedSize(24, 24)
         self.attach_button.setFlat(True)
-        self.attach_button.setStyleSheet(button_style)
+        self.attach_button.setStyleSheet(LLM_PANEL_BUTTON_STYLE)
         self.attach_button.setCursor(QtCore.Qt.PointingHandCursor)
         self.attach_button.clicked.connect(self._attach_files)
 
@@ -139,7 +137,7 @@ class LLMPanel(QtWidgets.QWidget):
         self.send_button.setToolTip("Send")
         self.send_button.setFixedSize(24, 24)
         self.send_button.setFlat(True)
-        self.send_button.setStyleSheet(button_style)
+        self.send_button.setStyleSheet(LLM_PANEL_BUTTON_STYLE)
         self.send_button.setCursor(QtCore.Qt.PointingHandCursor)
         self.send_button.clicked.connect(self._on_send)
 
@@ -157,7 +155,7 @@ class LLMPanel(QtWidgets.QWidget):
 
         # Control bar (no labels, minimal style)
         control_bar = QtWidgets.QWidget()
-        control_bar.setStyleSheet("background: transparent;")
+        control_bar.setStyleSheet(LLM_PANEL_CONTROL_BAR_STYLE)
         control_layout = QtWidgets.QHBoxLayout()
         control_layout.setContentsMargins(5, 2, 5, 2)
         control_layout.setSpacing(5)
@@ -206,13 +204,7 @@ class LLMPanel(QtWidgets.QWidget):
         self._drop_overlay.setText("Drop image to attach")
         self._drop_overlay.setAlignment(QtCore.Qt.AlignCenter)
         self._drop_overlay.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents, True)
-        self._drop_overlay.setStyleSheet(
-            "background: rgba(255,255,255,0.12);"
-            "color: rgba(255,255,255,0.9);"
-            "border: 2px dashed rgba(255,255,255,0.4);"
-            "border-radius: 8px;"
-            "font-size: 14px;"
-        )
+        self._drop_overlay.setStyleSheet(LLM_PANEL_DROP_OVERLAY_STYLE)
         self._drop_overlay.setGeometry(
             8, 8, max(0, self.width() - 16), max(0, self.height() - 16)
         )
@@ -254,24 +246,12 @@ class LLMPanel(QtWidgets.QWidget):
     def _update_rag_items_message(self):
         if self._in_planning_mode:
             return
-        # Remove existing RAG message if any
-        if self._rag_message_index is not None:
-            try:
-                self.message_history.pop(self._rag_message_index)
-            except Exception:
-                pass
-            self._rag_message_index = None
-
-        if not self._rag_items:
-            self._render_message_history()
-            return
-
-        arrow = ">" if self._rag_items_collapsed else "v"
-        header = f"{arrow} RAG Items ({len(self._rag_items)})"
-        body = "\n".join(f"• {item}" for item in self._rag_items)
-        text = header if self._rag_items_collapsed else f"{header}\n{body}"
-        self.message_history.append(("rag", text))
-        self._rag_message_index = len(self.message_history) - 1
+        # Remove existing RAG messages from history and re-render
+        try:
+            self.message_history = [m for m in self.message_history if m[0] != "rag"]
+        except Exception:
+            pass
+        self._rag_message_index = None
         self._render_message_history()
 
     def _on_thinking_anchor_clicked(self, url):
@@ -749,6 +729,23 @@ class LLMPanel(QtWidgets.QWidget):
         at_bottom = self._is_view_at_bottom()
         html_parts = []
 
+        if self._rag_items:
+            rag_items_text = "\n".join(f"• {item}" for item in self._rag_items)
+            arrow = ">" if self._rag_items_collapsed else "v"
+            html_parts.append(
+                f'<div style="margin-bottom: 10px;">'
+                f'<a href="rag-toggle" style="color: #d9a6ff; font-weight: bold; text-decoration: none;">'
+                f"{self._escape_html(f'{arrow} RAG Items ({len(self._rag_items)})')}"
+                f"</a>"
+                f"</div>"
+            )
+            if not self._rag_items_collapsed:
+                html_parts.append(
+                    f'<div style="margin-bottom: 10px; margin-left: 10px; color: #cbb6dd;">'
+                    f"{self._escape_html(rag_items_text)}"
+                    f"</div>"
+                )
+
         for msg_type, msg_text in self.message_history:
             if msg_type == "user":
                 # User messages in bold with blue color
@@ -775,20 +772,7 @@ class LLMPanel(QtWidgets.QWidget):
                         f"</div>"
                     )
             elif msg_type == "rag":
-                parts = msg_text.split("\n", 1)
-                header = parts[0]
-                body = parts[1] if len(parts) > 1 else ""
-                html_parts.append(
-                    f'<div style="margin-bottom: 10px;">'
-                    f'<a href="rag-toggle" style="color: #d9a6ff; font-weight: bold; text-decoration: none;">{self._escape_html(header)}</a>'
-                    f"</div>"
-                )
-                if body and not self._rag_items_collapsed:
-                    html_parts.append(
-                        f'<div style="margin-bottom: 10px; margin-left: 10px; color: #cbb6dd;">'
-                        f"{self._escape_html(body)}"
-                        f"</div>"
-                    )
+                continue
 
         self.thinking_text.setHtml("".join(html_parts))
         self._restore_scroll_position(at_bottom, scroll_value)
@@ -878,15 +862,19 @@ class LLMPanel(QtWidgets.QWidget):
                         f"</div>"
                     )
 
-            for msg in self._planning_conversation:
+            total_messages = len(self._planning_conversation)
+            for idx, msg in enumerate(self._planning_conversation):
                 role = msg["role"]
                 content = msg["content"]
+
+                if role != "user" and not content.strip():
+                    continue
 
                 if role == "user":
                     # User messages in blue
                     html_parts.append(
                         '<div style="margin-bottom: 15px;">'
-                        '<strong style="color: #4a9eff;">You:</strong><br>'
+                        '<strong style="color: #4a9eff;">User:</strong><br>'
                         f'<div style="margin-left: 10px;">{self._escape_html(content)}</div>'
                         "</div>"
                     )
@@ -897,9 +885,14 @@ class LLMPanel(QtWidgets.QWidget):
                     )
                     html_parts.append(
                         '<div style="margin-bottom: 15px;">'
-                        '<strong style="color: #4eff9e;">Assistant:</strong><br>'
+                        '<strong style="color: #4eff9e;">AI:</strong><br>'
                         f'<div style="margin-left: 10px;">{markdown_html}</div>'
                         "</div>"
+                    )
+
+                if idx < total_messages - 1:
+                    html_parts.append(
+                        '<hr style="border: 0; border-top: 1px solid rgba(255,255,255,0.12); margin: 10px 0;" />'
                     )
 
             html_parts.append("</div>")
