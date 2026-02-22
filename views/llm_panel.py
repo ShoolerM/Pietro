@@ -314,6 +314,17 @@ class LLMPanel(QtWidgets.QWidget):
         if not self.user_message_history:
             return
 
+        cursor = self.input_field.textCursor()
+        block = cursor.block()
+        first_block = self.input_field.document().findBlockByLineNumber(0)
+
+        # Only navigate history if we're on the first line
+        if block.blockNumber() != first_block.blockNumber():
+            # Move cursor up one line within current text
+            cursor.movePosition(QtGui.QTextCursor.Up)
+            self.input_field.setTextCursor(cursor)
+            return
+
         # Save current draft if we're at the bottom
         if self.history_index == -1:
             self.current_draft = self.input_field.toPlainText()
@@ -324,11 +335,26 @@ class LLMPanel(QtWidgets.QWidget):
             # Get message from end of list (most recent first)
             message = self.user_message_history[-(self.history_index + 1)]
             self.input_field.setPlainText(message)
-            # Move cursor to end
-            self.input_field.moveCursor(QtGui.QTextCursor.End)
+            # Move cursor to beginning
+            self.input_field.moveCursor(QtGui.QTextCursor.Start)
 
     def _navigate_history_down(self):
         """Navigate to next (newer) message in history."""
+        if not self.user_message_history:
+            return
+
+        cursor = self.input_field.textCursor()
+        block = cursor.block()
+        doc = self.input_field.document()
+        last_block = doc.findBlockByLineNumber(doc.blockCount() - 1)
+
+        # Only navigate history if we're on the last line
+        if block.blockNumber() != last_block.blockNumber():
+            # Move cursor down one line within current text
+            cursor.movePosition(QtGui.QTextCursor.Down)
+            self.input_field.setTextCursor(cursor)
+            return
+
         if self.history_index <= -1:
             return
 
