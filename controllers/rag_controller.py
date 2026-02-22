@@ -669,12 +669,13 @@ class RAGController:
 
         return matrix[len1][len2]
 
-    def _extract_matching_filenames(self, query, selected_dbs):
+    def _extract_matching_filenames(self, query, selected_dbs, quiet=False):
         """Extract filenames from query that fuzzy match files in selected databases.
 
         Args:
             query: User query string
             selected_dbs: List of selected database names
+            quiet: If True, suppress debug logging
 
         Returns:
             list: List of (db_name, filename) tuples for matched files
@@ -702,10 +703,16 @@ class RAGController:
 
                 # Check if any query token fuzzy matches the filename stem
                 for token in tokens:
-                    # Skip very short tokens to avoid false positives
-                    if len(token) < 5:
+                    # Skip very short tokens (< 3 chars) to avoid false positives
+                    if len(token) < 3:
                         continue
 
+                    # Check for exact match first (case-insensitive)
+                    if token == stem:
+                        matches.append((db_name, filename))
+                        break  # Only add each file once
+
+                    # For tokens >= 3 characters, allow fuzzy matching
                     # Skip if token and stem differ too much in length
                     # Allow at most threshold difference in length
                     if abs(len(token) - len(stem)) > threshold:
@@ -789,7 +796,7 @@ class RAGController:
                         traceback.print_exc()
 
             # Perform targeted filename matching to boost relevant files
-            matched_files = self._extract_matching_filenames(query, selected_dbs)
+            matched_files = self._extract_matching_filenames(query, selected_dbs, quiet)
             boosted_chunks = []
 
             if matched_files:
@@ -850,30 +857,38 @@ class RAGController:
                 self.view.set_rag_items([])
                 return ""
 
-            # Deduplicate results based on content
-            # The vectorstore may contain duplicate documents with different IDs
-            seen_contents = {}
+            # Deduplicate results based on content.
+            # Build an index of non-boosted results first, then upgrade any entry
+            # to boosted if the same chunk appears in the boosted collection.
+            seen_contents = {}   # content_hash -> index in deduped_results
             deduped_results = []
             for doc, score in all_results:
                 content_hash = hash(doc.page_content)
                 if content_hash not in seen_contents:
-                    seen_contents[content_hash] = True
+                    seen_contents[content_hash] = len(deduped_results)
                     deduped_results.append((doc, score, False))  # Not boosted
 
-            # Add boosted chunks, avoiding duplicates
+            # Add boosted chunks - if already present, upgrade to boosted in-place
             for doc, score, matched_filename in boosted_chunks:
                 content_hash = hash(doc.page_content)
-                if content_hash not in seen_contents:
-                    seen_contents[content_hash] = True
+                if content_hash in seen_contents:
+                    # Upgrade existing non-boosted entry to boosted
+                    idx = seen_contents[content_hash]
+                    existing_doc, existing_score, existing_boosted = deduped_results[idx]
+                    if not existing_boosted:
+                        deduped_results[idx] = (existing_doc, existing_score, matched_filename)
+                else:
+                    seen_contents[content_hash] = len(deduped_results)
                     deduped_results.append(
                         (doc, score, matched_filename)
                     )  # Boosted with filename
 
             if len(deduped_results) < len(all_results):
                 duplicates_removed = len(all_results) - len(deduped_results)
-                self.view.append_logs(
-                    f"Deduplication: removed {duplicates_removed} duplicate chunks"
-                )
+                if not quiet:
+                    self.view.append_logs(
+                        f"Deduplication: removed {duplicates_removed} duplicate chunks"
+                    )
 
             all_results = deduped_results
 
@@ -912,6 +927,10 @@ class RAGController:
                             self.view.append_logs(
                                 f"  Preserving boosted chunk from {is_boosted} (score: {score:.4f}, threshold: {adaptive_threshold:.4f})"
                             )
+
+                # Re-sort after both passes so preserved chunks are correctly
+                # prioritised (boosted first, then by score) before greedy packing
+                filtered_results.sort(key=lambda x: (not x[2], x[1]))
 
                 if len(filtered_results) < len(all_results):
                     pass
