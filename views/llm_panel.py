@@ -496,6 +496,10 @@ class LLMPanel(QtWidgets.QWidget):
         try:
             self.thinking_text.clear()
             self.message_history.clear()
+            self._planning_conversation = []
+            self._current_outline = ""
+            self._rag_message_index = None
+            self._ai_stream_index = None
         except Exception:
             pass
 
@@ -709,6 +713,9 @@ class LLMPanel(QtWidgets.QWidget):
     def clear_message_history(self):
         """Clear all message history."""
         self.message_history.clear()
+        self.user_message_history.clear()
+        self._planning_conversation = []
+        self._current_outline = ""
         self.thinking_text.clear()
         self._rag_message_index = None
         self._ai_stream_index = None
