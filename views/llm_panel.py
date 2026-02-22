@@ -455,9 +455,12 @@ class LLMPanel(QtWidgets.QWidget):
     def append_logs(self, text):
         """Append text to LLM Panel."""
         try:
-            self.thinking_text.moveCursor(QtGui.QTextCursor.End)
-            self.thinking_text.insertPlainText(text)
-            self.thinking_text.moveCursor(QtGui.QTextCursor.End)
+            at_bottom = self._is_view_at_bottom()
+            cursor = QtGui.QTextCursor(self.thinking_text.document())
+            cursor.movePosition(QtGui.QTextCursor.End)
+            cursor.insertText(text)
+            if at_bottom:
+                self.thinking_text.moveCursor(QtGui.QTextCursor.End)
         except Exception:
             pass
 
@@ -479,9 +482,12 @@ class LLMPanel(QtWidgets.QWidget):
     def append_llm_panel_text(self, text):
         """Append text to LLM Panel thinking text area."""
         try:
-            self.thinking_text.moveCursor(QtGui.QTextCursor.End)
-            self.thinking_text.insertPlainText(text)
-            self.thinking_text.moveCursor(QtGui.QTextCursor.End)
+            at_bottom = self._is_view_at_bottom()
+            cursor = QtGui.QTextCursor(self.thinking_text.document())
+            cursor.movePosition(QtGui.QTextCursor.End)
+            cursor.insertText(text)
+            if at_bottom:
+                self.thinking_text.moveCursor(QtGui.QTextCursor.End)
         except Exception:
             pass
 
@@ -732,6 +738,8 @@ class LLMPanel(QtWidgets.QWidget):
 
     def _render_message_history(self):
         """Render the message history with formatting."""
+        scroll_value = self.thinking_text.verticalScrollBar().value()
+        at_bottom = self._is_view_at_bottom()
         html_parts = []
 
         for msg_type, msg_text in self.message_history:
@@ -776,8 +784,7 @@ class LLMPanel(QtWidgets.QWidget):
                     )
 
         self.thinking_text.setHtml("".join(html_parts))
-        # Scroll to bottom
-        self.thinking_text.moveCursor(QtGui.QTextCursor.End)
+        self._restore_scroll_position(at_bottom, scroll_value)
 
     def _escape_html(self, text):
         """Escape HTML special characters and preserve newlines."""
@@ -840,6 +847,8 @@ class LLMPanel(QtWidgets.QWidget):
         try:
             import markdown
 
+            scroll_value = self.thinking_text.verticalScrollBar().value()
+            at_bottom = self._is_view_at_bottom()
             html_parts = []
             html_parts.append(
                 '<div style="font-family: sans-serif; line-height: 1.6;">'
@@ -889,10 +898,28 @@ class LLMPanel(QtWidgets.QWidget):
             html_parts.append("</div>")
 
             self.thinking_text.setHtml("".join(html_parts))
-            # Scroll to bottom
-            self.thinking_text.moveCursor(QtGui.QTextCursor.End)
+            self._restore_scroll_position(at_bottom, scroll_value)
         except Exception as e:
             print(f"Error rendering planning conversation: {e}")
+
+    def _is_view_at_bottom(self, threshold=4):
+        """Check whether the thinking view is scrolled to the bottom."""
+        try:
+            bar = self.thinking_text.verticalScrollBar()
+            return bar.value() >= bar.maximum() - threshold
+        except Exception:
+            return True
+
+    def _restore_scroll_position(self, was_at_bottom, previous_value):
+        """Restore scroll position after content update."""
+        try:
+            bar = self.thinking_text.verticalScrollBar()
+            target_value = (
+                bar.maximum() if was_at_bottom else min(previous_value, bar.maximum())
+            )
+            QtCore.QTimer.singleShot(0, lambda: bar.setValue(target_value))
+        except Exception:
+            pass
 
     def get_planning_conversation(self):
         """Get the planning conversation history."""
