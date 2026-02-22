@@ -152,7 +152,11 @@ class RAGController:
             if not file_path.exists():
                 return None
 
-            # Read text file
+            # Check if file is empty
+            if file_path.stat().st_size == 0:
+                return None
+
+            # Read text file with multiple encoding attempts
             if file_path.suffix.lower() in [
                 ".txt",
                 ".md",
@@ -163,19 +167,38 @@ class RAGController:
                 ".css",
                 ".js",
             ]:
-                with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
-                    return f.read()
+                # Try multiple encodings
+                encodings = ['utf-8', 'utf-16', 'utf-16-le', 'utf-16-be', 'latin-1', 'cp1252']
+                
+                for encoding in encodings:
+                    try:
+                        with open(file_path, "r", encoding=encoding, errors='strict') as f:
+                            content = f.read()
+                            if content and content.strip():  # Check if content is not just whitespace
+                                return content
+                    except (UnicodeDecodeError, UnicodeError):
+                        continue
+                    except Exception:
+                        continue
+                
+                # If all encodings fail, try with error replacement
+                try:
+                    with open(file_path, "r", encoding="utf-8", errors='replace') as f:
+                        content = f.read()
+                        return content if content and content.strip() else None
+                except Exception:
+                    return None
 
-            # Add more file types as needed
-            # For now, treat unknown types as text
+            # For unknown file types, try to read as text
             try:
-                with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
-                    return f.read()
-            except:
+                with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+                    content = f.read()
+                    return content if content and content.strip() else None
+            except Exception:
                 return None
 
         except Exception as e:
-            self.view.append_logs(f"Error loading document '{file_path}': {e}")
+            self.view.append_logs(f"⚠️ Error loading document '{file_path}': {e}")
             return None
 
     def _on_rag_model_changed(self, event_type, data):
@@ -254,9 +277,15 @@ class RAGController:
             file_name = Path(file_path).name
             log(f"\nStep 2: Loading document '{file_name}'...")
 
+            # Check file size first
+            file_size = Path(file_path).stat().st_size
+            if file_size == 0:
+                log(f"⚠️ File is empty (0 bytes) - skipping")
+                raise Exception(f"File is empty: {file_path}")
+
             text = self._load_document(file_path)
             if not text:
-                log(f"❌ Could not read file")
+                log(f"❌ Could not read file (may be empty or unsupported encoding)")
                 raise Exception(f"Could not read file: {file_path}")
 
             log(f"✓ Loaded {len(text)} characters")

@@ -157,7 +157,7 @@ class LLMController:
         # Create LLM instance
         self.llm = ChatOpenAI(
             base_url=self.llm_model.base_url,
-            api_key=self.llm_model.api_key or None,
+            api_key=self.llm_model.api_key or "not-needed",
             streaming=True,
             temperature=self.llm_model.temperature,
         )
@@ -180,7 +180,7 @@ class LLMController:
             try:
                 self.llm = ChatOpenAI(
                     base_url=self.llm_model.base_url,
-                    api_key=self.llm_model.api_key or None,
+                    api_key=self.llm_model.api_key or "not-needed",
                     model=model_name,
                     streaming=True,
                     temperature=self.llm_model.temperature,
@@ -452,6 +452,7 @@ class LLMController:
 
             llm_no_streaming = ChatOpenAI(
                 base_url=self.llm_model.base_url,
+                api_key=self.llm_model.api_key or "not-needed",
                 model=model_name if model_name else "default",
                 streaming=False,
                 temperature=0.3,
@@ -511,6 +512,7 @@ class LLMController:
 
             llm_no_streaming = ChatOpenAI(
                 base_url=self.llm_model.base_url,
+                api_key=self.llm_model.api_key or "not-needed",
                 model=model_name if model_name else "default",
                 streaming=False,
                 temperature=0.3,
@@ -568,6 +570,7 @@ class LLMController:
 
             llm_no_streaming = ChatOpenAI(
                 base_url=self.llm_model.base_url,
+                api_key=self.llm_model.api_key or "not-needed",
                 model=model_name if model_name else "default",
                 streaming=False,
                 temperature=0.3,
@@ -683,6 +686,7 @@ class LLMController:
             # Create LLM with streaming enabled if callback provided
             llm_for_notes = ChatOpenAI(
                 base_url=self.llm_model.base_url,
+                api_key=self.llm_model.api_key or "not-needed",
                 model=model_name if model_name else "default",
                 streaming=bool(on_chunk_callback),
                 temperature=0.5,  # Slightly creative but focused
@@ -781,6 +785,7 @@ class LLMController:
 
             llm_no_streaming = ChatOpenAI(
                 base_url=self.llm_model.base_url,
+                api_key=self.llm_model.api_key or "not-needed",
                 model=model_name if model_name else "default",
                 streaming=False,
                 temperature=0.3,
@@ -851,6 +856,7 @@ class LLMController:
 
             llm_no_streaming = ChatOpenAI(
                 base_url=self.llm_model.base_url,
+                api_key=self.llm_model.api_key or "not-needed",
                 model=model_name if model_name else "default",
                 streaming=False,
                 temperature=0.3,
