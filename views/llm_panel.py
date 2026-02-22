@@ -751,8 +751,9 @@ class LLMPanel(QtWidgets.QWidget):
 
     def _render_message_history(self):
         """Render the message history with formatting."""
-        scroll_value = self.thinking_text.verticalScrollBar().value()
-        at_bottom = self._is_view_at_bottom()
+        bar = self.thinking_text.verticalScrollBar()
+        was_at_bottom = self._is_view_at_bottom()
+        scroll_value = bar.value()
         html_parts = []
 
         if self._rag_items:
@@ -801,7 +802,11 @@ class LLMPanel(QtWidgets.QWidget):
                 continue
 
         self.thinking_text.setHtml("".join(html_parts))
-        self._restore_scroll_position(at_bottom, scroll_value)
+        # Restore scroll position immediately after setHtml
+        if was_at_bottom:
+            bar.setValue(bar.maximum())
+        else:
+            bar.setValue(min(scroll_value, bar.maximum()))
 
     def _escape_html(self, text):
         """Escape HTML special characters and preserve newlines."""
@@ -864,8 +869,9 @@ class LLMPanel(QtWidgets.QWidget):
         try:
             import markdown
 
-            scroll_value = self.thinking_text.verticalScrollBar().value()
-            at_bottom = self._is_view_at_bottom()
+            bar = self.thinking_text.verticalScrollBar()
+            was_at_bottom = self._is_view_at_bottom()
+            scroll_value = bar.value()
             html_parts = []
             html_parts.append(
                 '<div style="font-family: sans-serif; line-height: 1.6;">'
@@ -924,7 +930,11 @@ class LLMPanel(QtWidgets.QWidget):
             html_parts.append("</div>")
 
             self.thinking_text.setHtml("".join(html_parts))
-            self._restore_scroll_position(at_bottom, scroll_value)
+            # Restore scroll position immediately after setHtml
+            if was_at_bottom:
+                bar.setValue(bar.maximum())
+            else:
+                bar.setValue(min(scroll_value, bar.maximum()))
         except Exception as e:
             print(f"Error rendering planning conversation: {e}")
 
@@ -935,17 +945,6 @@ class LLMPanel(QtWidgets.QWidget):
             return bar.value() >= bar.maximum() - threshold
         except Exception:
             return True
-
-    def _restore_scroll_position(self, was_at_bottom, previous_value):
-        """Restore scroll position after content update."""
-        try:
-            bar = self.thinking_text.verticalScrollBar()
-            target_value = (
-                bar.maximum() if was_at_bottom else min(previous_value, bar.maximum())
-            )
-            QtCore.QTimer.singleShot(0, lambda: bar.setValue(target_value))
-        except Exception:
-            pass
 
     def get_planning_conversation(self):
         """Get the planning conversation history."""
