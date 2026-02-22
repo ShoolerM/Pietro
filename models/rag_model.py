@@ -33,6 +33,11 @@ class RAGModel(Observable):
         self.summary_chunk_size = 1500  # Default: max raw tokens for summarization
         self.score_variance_threshold = 0.05  # Default: 5% variance from top score
 
+        # Filename matching/boosting settings
+        self.filename_boost_enabled = True  # Default: enable filename boosting
+        self.max_filename_chunks = 1  # Default: guarantee 1 chunk per matched file
+        self.levenshtein_threshold = 2  # Default: allow 2 character edit distance
+
         # Load databases and settings
         self._load_data()
 
@@ -54,6 +59,15 @@ class RAGModel(Observable):
                     )
                     self.summary_chunk_size = settings.get("summary_chunk_size", 1500)
 
+                    # Load filename boost settings
+                    self.filename_boost_enabled = settings.get(
+                        "filename_boost_enabled", True
+                    )
+                    self.max_filename_chunks = settings.get("max_filename_chunks", 1)
+                    self.levenshtein_threshold = settings.get(
+                        "levenshtein_threshold", 2
+                    )
+
                     # Persist missing settings keys for older files
                     if any(
                         key not in settings
@@ -61,6 +75,9 @@ class RAGModel(Observable):
                             "max_chunks",
                             "summary_chunk_size",
                             "score_variance_threshold",
+                            "filename_boost_enabled",
+                            "max_filename_chunks",
+                            "levenshtein_threshold",
                         ]
                     ):
                         self._save_data()
@@ -102,6 +119,9 @@ class RAGModel(Observable):
                     "max_chunks": self.max_chunks,
                     "summary_chunk_size": self.summary_chunk_size,
                     "score_variance_threshold": self.score_variance_threshold,
+                    "filename_boost_enabled": self.filename_boost_enabled,
+                    "max_filename_chunks": self.max_filename_chunks,
+                    "levenshtein_threshold": self.levenshtein_threshold,
                 },
                 "selected_databases": list(self._selected_databases),
             }
@@ -334,4 +354,41 @@ class RAGModel(Observable):
         )
         self.notify_observers(
             "score_variance_threshold_changed", self.score_variance_threshold
+        )
+
+    def set_filename_boost_enabled(self, enabled):
+        """Enable or disable filename-based chunk boosting.
+
+        Args:
+            enabled: Boolean to enable/disable feature
+        """
+        self.filename_boost_enabled = bool(enabled)
+        self._save_data()
+        print(f"RAG filename boost enabled: {self.filename_boost_enabled}")
+        self.notify_observers(
+            "filename_boost_enabled_changed", self.filename_boost_enabled
+        )
+
+    def set_max_filename_chunks(self, count):
+        """Set the maximum number of chunks to guarantee from filename-matched files.
+
+        Args:
+            count: Integer between 0 and 5
+        """
+        self.max_filename_chunks = max(0, min(5, int(count)))
+        self._save_data()
+        print(f"RAG max filename chunks set to: {self.max_filename_chunks}")
+        self.notify_observers("max_filename_chunks_changed", self.max_filename_chunks)
+
+    def set_levenshtein_threshold(self, threshold):
+        """Set the Levenshtein distance threshold for fuzzy filename matching.
+
+        Args:
+            threshold: Integer between 0 and 3 (character edit distance)
+        """
+        self.levenshtein_threshold = max(0, min(3, int(threshold)))
+        self._save_data()
+        print(f"RAG Levenshtein threshold set to: {self.levenshtein_threshold}")
+        self.notify_observers(
+            "levenshtein_threshold_changed", self.levenshtein_threshold
         )

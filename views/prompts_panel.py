@@ -34,6 +34,9 @@ class UtilitiesPanel(QtWidgets.QWidget):
     rag_max_chunks_changed = QtCore.pyqtSignal(int)
     rag_summary_chunk_size_changed = QtCore.pyqtSignal(int)
     rag_score_threshold_changed = QtCore.pyqtSignal(float)
+    rag_filename_boost_enabled_changed = QtCore.pyqtSignal(bool)
+    rag_max_filename_chunks_changed = QtCore.pyqtSignal(int)
+    rag_levenshtein_threshold_changed = QtCore.pyqtSignal(int)
     rag_settings_requested = QtCore.pyqtSignal()
     prompt_selections_changed = QtCore.pyqtSignal(list, str)
     font_size_changed = QtCore.pyqtSignal(int)
@@ -123,6 +126,15 @@ class UtilitiesPanel(QtWidgets.QWidget):
         self.rag_panel.score_threshold_changed.connect(
             self.rag_score_threshold_changed.emit
         )
+        self.rag_panel.filename_boost_enabled_changed.connect(
+            self.rag_filename_boost_enabled_changed.emit
+        )
+        self.rag_panel.max_filename_chunks_changed.connect(
+            self.rag_max_filename_chunks_changed.emit
+        )
+        self.rag_panel.levenshtein_threshold_changed.connect(
+            self.rag_levenshtein_threshold_changed.emit
+        )
         self.rag_panel.settings_requested.connect(self.rag_settings_requested.emit)
 
     def _on_prompt_selections_changed(self, *_):
@@ -157,11 +169,17 @@ class UtilitiesPanel(QtWidgets.QWidget):
         current_max_chunks=10,
         current_summary_chunk_size=1500,
         current_score_threshold=5.0,
+        current_filename_boost_enabled=True,
+        current_max_filename_chunks=1,
+        current_levenshtein_threshold=2,
     ):
         return self.rag_controller.show_settings_dialog(
             current_max_chunks,
             current_summary_chunk_size,
             current_score_threshold,
+            current_filename_boost_enabled,
+            current_max_filename_chunks,
+            current_levenshtein_threshold,
         )
 
     def append_logs(self, text: str):

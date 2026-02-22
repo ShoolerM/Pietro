@@ -84,6 +84,9 @@ class SettingsController:
             current_max_chunks=self.rag_model.max_chunks,
             current_summary_chunk_size=self.rag_model.summary_chunk_size,
             current_score_threshold=current_threshold_percent,
+            current_filename_boost_enabled=self.rag_model.filename_boost_enabled,
+            current_max_filename_chunks=self.rag_model.max_filename_chunks,
+            current_levenshtein_threshold=self.rag_model.levenshtein_threshold,
         )
 
     def on_model_settings_requested(self):

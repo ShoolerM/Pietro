@@ -146,6 +146,15 @@ class MainController:
         self.view.rag_score_threshold_changed.connect(
             self.rag_model.set_score_variance_threshold
         )
+        self.view.rag_filename_boost_enabled_changed.connect(
+            self.rag_model.set_filename_boost_enabled
+        )
+        self.view.rag_max_filename_chunks_changed.connect(
+            self.rag_model.set_max_filename_chunks
+        )
+        self.view.rag_levenshtein_threshold_changed.connect(
+            self.rag_model.set_levenshtein_threshold
+        )
         self.view.rag_settings_requested.connect(
             self.settings_controller.on_rag_settings_requested
         )

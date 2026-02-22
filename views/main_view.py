@@ -39,6 +39,13 @@ class MainView(QtWidgets.QWidget):
     rag_score_threshold_changed = QtCore.pyqtSignal(
         float
     )  # score variance threshold percentage
+    rag_filename_boost_enabled_changed = QtCore.pyqtSignal(
+        bool
+    )  # enable filename boosting
+    rag_max_filename_chunks_changed = QtCore.pyqtSignal(
+        int
+    )  # max chunks per matched file
+    rag_levenshtein_threshold_changed = QtCore.pyqtSignal(int)  # fuzzy match distance
     rag_settings_requested = QtCore.pyqtSignal()  # request to show settings dialog
     prompt_selections_changed = QtCore.pyqtSignal(
         list, str
@@ -252,6 +259,15 @@ class MainView(QtWidgets.QWidget):
         self.utilities_panel.rag_score_threshold_changed.connect(
             self.rag_score_threshold_changed.emit
         )
+        self.utilities_panel.rag_filename_boost_enabled_changed.connect(
+            self.rag_filename_boost_enabled_changed.emit
+        )
+        self.utilities_panel.rag_max_filename_chunks_changed.connect(
+            self.rag_max_filename_chunks_changed.emit
+        )
+        self.utilities_panel.rag_levenshtein_threshold_changed.connect(
+            self.rag_levenshtein_threshold_changed.emit
+        )
         self.utilities_panel.rag_settings_requested.connect(
             self.rag_settings_requested.emit
         )
@@ -458,12 +474,18 @@ class MainView(QtWidgets.QWidget):
         current_max_chunks=10,
         current_summary_chunk_size=1500,
         current_score_threshold=5.0,
+        current_filename_boost_enabled=True,
+        current_max_filename_chunks=1,
+        current_levenshtein_threshold=2,
     ):
         """Show RAG settings dialog with current values."""
         return self.utilities_panel.show_rag_settings_dialog(
             current_max_chunks=current_max_chunks,
             current_summary_chunk_size=current_summary_chunk_size,
             current_score_threshold=current_score_threshold,
+            current_filename_boost_enabled=current_filename_boost_enabled,
+            current_max_filename_chunks=current_max_filename_chunks,
+            current_levenshtein_threshold=current_levenshtein_threshold,
         )
 
     def show_inference_settings_dialog(

@@ -15,6 +15,9 @@ class RagPanel(QtWidgets.QWidget):
     max_chunks_changed = QtCore.pyqtSignal(int)
     summary_chunk_size_changed = QtCore.pyqtSignal(int)
     score_threshold_changed = QtCore.pyqtSignal(float)
+    filename_boost_enabled_changed = QtCore.pyqtSignal(bool)
+    max_filename_chunks_changed = QtCore.pyqtSignal(int)
+    levenshtein_threshold_changed = QtCore.pyqtSignal(int)
     settings_requested = QtCore.pyqtSignal()
     font_size_changed = QtCore.pyqtSignal(int)
 
@@ -183,6 +186,9 @@ class RagPanel(QtWidgets.QWidget):
         current_max_chunks=10,
         current_summary_chunk_size=1500,
         current_score_threshold=5.0,
+        current_filename_boost_enabled=True,
+        current_max_filename_chunks=1,
+        current_levenshtein_threshold=2,
     ):
         dialog = QtWidgets.QDialog(self)
         dialog.setWindowTitle("RAG Settings")
@@ -277,6 +283,63 @@ class RagPanel(QtWidgets.QWidget):
         threshold_layout.addLayout(threshold_input_layout)
         threshold_group.setLayout(threshold_layout)
 
+        # Filename Matching/Boosting Settings
+        filename_group = QtWidgets.QGroupBox("Filename Matching")
+        filename_layout = QtWidgets.QVBoxLayout()
+
+        filename_desc = QtWidgets.QLabel(
+            "When words in your prompt match filenames (with fuzzy matching),\n"
+            "guarantee that RAG retrieves chunks from those files.\n"
+            "Helps ensure character/location-specific content is included.\n"
+            "Default: Enabled, 1 chunk per match, edit distance ≤2"
+        )
+        filename_desc.setWordWrap(True)
+        filename_layout.addWidget(filename_desc)
+
+        # Enable checkbox
+        filename_enable_checkbox = QtWidgets.QCheckBox("Enable filename boosting")
+        filename_enable_checkbox.setChecked(current_filename_boost_enabled)
+        filename_enable_checkbox.setToolTip(
+            "Enable fuzzy filename matching to boost relevant files"
+        )
+        filename_layout.addWidget(filename_enable_checkbox)
+
+        # Max chunks spinbox
+        max_filename_chunks_layout = QtWidgets.QHBoxLayout()
+        max_filename_chunks_label = QtWidgets.QLabel("Max chunks per matched file:")
+        max_filename_chunks_layout.addWidget(max_filename_chunks_label)
+
+        max_filename_chunks_spinbox = QtWidgets.QSpinBox()
+        max_filename_chunks_spinbox.setMinimum(0)
+        max_filename_chunks_spinbox.setMaximum(5)
+        max_filename_chunks_spinbox.setValue(current_max_filename_chunks)
+        max_filename_chunks_spinbox.setToolTip(
+            "Up to N chunks guaranteed from each filename-matched file (0-5)"
+        )
+        max_filename_chunks_layout.addWidget(max_filename_chunks_spinbox)
+        max_filename_chunks_layout.addStretch()
+
+        filename_layout.addLayout(max_filename_chunks_layout)
+
+        # Levenshtein threshold spinbox
+        levenshtein_layout = QtWidgets.QHBoxLayout()
+        levenshtein_label = QtWidgets.QLabel("Fuzzy match distance:")
+        levenshtein_layout.addWidget(levenshtein_label)
+
+        levenshtein_spinbox = QtWidgets.QSpinBox()
+        levenshtein_spinbox.setMinimum(0)
+        levenshtein_spinbox.setMaximum(3)
+        levenshtein_spinbox.setValue(current_levenshtein_threshold)
+        levenshtein_spinbox.setToolTip(
+            "Character edit distance threshold for fuzzy matching (0-3)\n"
+            "0 = exact match only, 2 = allow ~2 character differences"
+        )
+        levenshtein_layout.addWidget(levenshtein_spinbox)
+        levenshtein_layout.addStretch()
+
+        filename_layout.addLayout(levenshtein_layout)
+        filename_group.setLayout(filename_layout)
+
         button_box = QtWidgets.QDialogButtonBox(
             QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel
         )
@@ -286,6 +349,7 @@ class RagPanel(QtWidgets.QWidget):
         layout.addWidget(max_chunks_group)
         layout.addWidget(summary_group)
         layout.addWidget(threshold_group)
+        layout.addWidget(filename_group)
         layout.addWidget(button_box)
 
         dialog.setLayout(layout)
@@ -294,6 +358,12 @@ class RagPanel(QtWidgets.QWidget):
             max_chunks = max_chunks_spinbox.value()
             summary_chunk_size = summary_spinbox.value()
             score_threshold = threshold_spinbox.value()
+            filename_boost_enabled = filename_enable_checkbox.isChecked()
+            max_filename_chunks = max_filename_chunks_spinbox.value()
+            levenshtein_threshold = levenshtein_spinbox.value()
             self.max_chunks_changed.emit(max_chunks)
             self.summary_chunk_size_changed.emit(summary_chunk_size)
             self.score_threshold_changed.emit(score_threshold)
+            self.filename_boost_enabled_changed.emit(filename_boost_enabled)
+            self.max_filename_chunks_changed.emit(max_filename_chunks)
+            self.levenshtein_threshold_changed.emit(levenshtein_threshold)

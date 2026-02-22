@@ -3,6 +3,7 @@
 import re
 import traceback
 from pathlib import Path
+from difflib import SequenceMatcher
 import numpy as np
 from PyQt5 import QtWidgets
 from sklearn.metrics.pairwise import cosine_similarity
@@ -594,6 +595,101 @@ class RAGController:
             traceback.print_exc()
             self.view.show_warning("Delete Error", f"Failed to delete database:\n{e}")
 
+    def _calculate_edit_distance(self, s1, s2):
+        """Calculate Levenshtein edit distance between two strings.
+
+        Args:
+            s1: First string
+            s2: Second string
+
+        Returns:
+            int: Levenshtein distance
+        """
+        s1 = s1.lower()
+        s2 = s2.lower()
+
+        # Quick length check - if difference is > threshold, skip expensive calculation
+        if abs(len(s1) - len(s2)) > self.model.levenshtein_threshold:
+            return 999  # Return high value to indicate no match
+
+        # Initialize distance matrix
+        len1, len2 = len(s1), len(s2)
+        if len1 == 0:
+            return len2
+        if len2 == 0:
+            return len1
+
+        # Create matrix
+        matrix = [[0] * (len2 + 1) for _ in range(len1 + 1)]
+
+        # Initialize first row and column
+        for i in range(len1 + 1):
+            matrix[i][0] = i
+        for j in range(len2 + 1):
+            matrix[0][j] = j
+
+        # Calculate distances
+        for i in range(1, len1 + 1):
+            for j in range(1, len2 + 1):
+                cost = 0 if s1[i - 1] == s2[j - 1] else 1
+                matrix[i][j] = min(
+                    matrix[i - 1][j] + 1,  # deletion
+                    matrix[i][j - 1] + 1,  # insertion
+                    matrix[i - 1][j - 1] + cost,  # substitution
+                )
+
+        return matrix[len1][len2]
+
+    def _extract_matching_filenames(self, query, selected_dbs):
+        """Extract filenames from query that fuzzy match files in selected databases.
+
+        Args:
+            query: User query string
+            selected_dbs: List of selected database names
+
+        Returns:
+            list: List of (db_name, filename) tuples for matched files
+        """
+        if not self.model.filename_boost_enabled:
+            return []
+
+        # Tokenize query using regex to split on whitespace and punctuation
+        tokens = [t for t in re.split(r"[\s\W]+", query.lower()) if t]
+
+        if not tokens:
+            return []
+
+        matches = []
+        threshold = self.model.levenshtein_threshold
+
+        # Iterate through all files in selected databases
+        for db_name in selected_dbs:
+            file_paths = self.model.get_database_files(db_name)
+
+            for file_path in file_paths:
+                # Extract filename (remove extension, keep rest as-is)
+                filename = Path(file_path).name
+                stem = Path(file_path).stem.lower()
+
+                # Check if any query token fuzzy matches the filename stem
+                for token in tokens:
+                    # Skip very short tokens to avoid false positives
+                    if len(token) < 5:
+                        continue
+
+                    # Skip if token and stem differ too much in length
+                    # Allow at most threshold difference in length
+                    if abs(len(token) - len(stem)) > threshold:
+                        continue
+
+                    distance = self._calculate_edit_distance(token, stem)
+
+                    if distance <= threshold:
+                        matches.append((db_name, filename))
+                        break  # Only add each file once
+
+        return matches
+
     def query_databases(
         self, query, max_tokens=None, selected_dbs_override=None, quiet=False
     ):
@@ -663,6 +759,64 @@ class RAGController:
                         )
                         traceback.print_exc()
 
+            # Perform targeted filename matching to boost relevant files
+            matched_files = self._extract_matching_filenames(query, selected_dbs)
+            boosted_chunks = []
+
+            if matched_files:
+                if not quiet:
+                    matched_names = [fname for _, fname in matched_files]
+                    self.view.append_logs(
+                        f"Filename matches: {', '.join(matched_names)}"
+                    )
+
+                for db_name, target_filename in matched_files:
+                    vectorstore = self._load_vectorstore(db_name)
+                    if not vectorstore:
+                        continue
+
+                    try:
+                        # Query using filename stem to boost semantic similarity to that file
+                        # This makes chunks from the target file rank higher
+                        file_stem = Path(target_filename).stem
+                        boosted_query = f"{query} {file_stem}"
+
+                        # Retrieve many chunks - using boosted query helps get chunks from target file
+                        extra_k = 500  # Increased to ensure we get chunks from the target file
+                        docs_with_scores = vectorstore.similarity_search_with_score(
+                            boosted_query, k=extra_k
+                        )
+
+                        # Filter to only chunks from the matched filename
+                        file_chunks = [
+                            (doc, score)
+                            for doc, score in docs_with_scores
+                            if doc.metadata.get("file_name") == target_filename
+                        ]
+
+                        if not quiet and len(file_chunks) == 0:
+                            self.view.append_logs(
+                                f"  Warning: No chunks found for {target_filename} in top {extra_k} results"
+                            )
+                        elif not quiet:
+                            self.view.append_logs(
+                                f"  Found {len(file_chunks)} chunks from {target_filename}"
+                            )
+
+                        # Take top N chunks from this file by similarity score
+                        file_chunks.sort(key=lambda x: x[1])  # Sort by score
+                        file_chunks = file_chunks[: self.model.max_filename_chunks]
+
+                        # Mark these as boosted and add to collection
+                        for doc, score in file_chunks:
+                            boosted_chunks.append((doc, score, target_filename))
+
+                    except Exception as e:
+                        if not quiet:
+                            self.view.append_logs(
+                                f"Error retrieving boosted chunks from '{target_filename}': {e}"
+                            )
+
             if not all_results:
                 self.view.set_rag_items([])
                 return ""
@@ -675,7 +829,16 @@ class RAGController:
                 content_hash = hash(doc.page_content)
                 if content_hash not in seen_contents:
                     seen_contents[content_hash] = True
-                    deduped_results.append((doc, score))
+                    deduped_results.append((doc, score, False))  # Not boosted
+
+            # Add boosted chunks, avoiding duplicates
+            for doc, score, matched_filename in boosted_chunks:
+                content_hash = hash(doc.page_content)
+                if content_hash not in seen_contents:
+                    seen_contents[content_hash] = True
+                    deduped_results.append(
+                        (doc, score, matched_filename)
+                    )  # Boosted with filename
 
             if len(deduped_results) < len(all_results):
                 duplicates_removed = len(all_results) - len(deduped_results)
@@ -686,34 +849,54 @@ class RAGController:
             all_results = deduped_results
 
             # Sort by relevance (lower score = more relevant)
-            all_results.sort(key=lambda x: x[1])
+            # BUT prioritize boosted chunks by sorting them to the front
+            # This ensures they survive greedy token packing
+            all_results.sort(
+                key=lambda x: (not x[2], x[1])
+            )  # False (not boosted) sorts after True (boosted), then by score
 
             # Adaptive threshold: filter out chunks significantly worse than best result
+            # But preserve at least one boosted chunk per matched file
             if all_results:
                 best_score = all_results[0][1]
                 # Use configurable percentage threshold (default 5%)
                 threshold_multiplier = 1 + self.model.score_variance_threshold
                 adaptive_threshold = best_score * threshold_multiplier
 
-                filtered_results = [
-                    (doc, score)
-                    for doc, score in all_results
-                    if score <= adaptive_threshold
-                ]
+                filtered_results = []
+                boosted_files_kept = set()
+                boosted_files_needed = {filename for _, filename in matched_files}
+
+                # First pass: add all chunks within threshold
+                for doc, score, is_boosted in all_results:
+                    if score <= adaptive_threshold:
+                        filtered_results.append((doc, score, is_boosted))
+                        if is_boosted:
+                            boosted_files_kept.add(is_boosted)
+
+                # Second pass: ensure at least one chunk per matched file
+                for doc, score, is_boosted in all_results:
+                    if is_boosted and is_boosted not in boosted_files_kept:
+                        filtered_results.append((doc, score, is_boosted))
+                        boosted_files_kept.add(is_boosted)
+                        if not quiet:
+                            self.view.append_logs(
+                                f"  Preserving boosted chunk from {is_boosted} (score: {score:.4f}, threshold: {adaptive_threshold:.4f})"
+                            )
 
                 if len(filtered_results) < len(all_results):
                     pass
 
                 # Always keep at least top 3 results regardless of threshold
                 all_results = filtered_results if filtered_results else all_results[:3]
-                if len(all_results) < 3 and len(all_results) < len(filtered_results):
-                    all_results = all_results[:3]
+                if len(all_results) < 3 and len(filtered_results):
+                    all_results = filtered_results[:3]
 
             # Greedy packing: add chunks until token budget exhausted
             selected_chunks = []
             total_tokens = 0
 
-            for doc, score in all_results:
+            for doc, score, is_boosted in all_results:
                 chunk_tokens = StoryModel.estimate_token_count(doc.page_content)
 
                 # Check if adding this chunk would exceed budget
@@ -727,12 +910,14 @@ class RAGController:
                         chars_to_keep = remaining * 4  # ~4 chars per token
                         truncated_content = doc.page_content[:chars_to_keep] + "..."
                         selected_chunks.append(
-                            (truncated_content, score, chunk_tokens, True)
+                            (truncated_content, score, chunk_tokens, True, is_boosted)
                         )
                         total_tokens += remaining
                     break
 
-                selected_chunks.append((doc.page_content, score, chunk_tokens, False))
+                selected_chunks.append(
+                    (doc.page_content, score, chunk_tokens, False, is_boosted)
+                )
                 total_tokens += chunk_tokens
 
             if not selected_chunks:
@@ -740,14 +925,15 @@ class RAGController:
                 return ""
 
             rag_items = []
-            for idx, (content, score, tokens, truncated) in enumerate(
+            for idx, (content, score, tokens, truncated, is_boosted) in enumerate(
                 selected_chunks, 1
             ):
                 trunc_marker = " [TRUNCATED]" if truncated else ""
+                boost_marker = " ★" if is_boosted else ""
                 source_file = "unknown"
                 chunk_idx = "?"
                 # Try to get metadata from original doc
-                for doc, s in all_results:
+                for doc, s, boosted in all_results:
                     if doc.page_content == content or (
                         truncated and content.startswith(doc.page_content[:50])
                     ):
@@ -755,14 +941,14 @@ class RAGController:
                         chunk_idx = doc.metadata.get("chunk_index", "?")
                         break
                 rag_items.append(
-                    f"{source_file} (chunk {chunk_idx}) — score: {score:.4f}{trunc_marker}"
+                    f"{source_file} (chunk {chunk_idx}) — score: {score:.4f}{trunc_marker}{boost_marker}"
                 )
 
             self.view.set_rag_items(rag_items)
 
             # Combine results
             context = "\n\n---\n\n".join(
-                [content for content, _, _, _ in selected_chunks]
+                [content for content, _, _, _, _ in selected_chunks]
             )
 
             return context
