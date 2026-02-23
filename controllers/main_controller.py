@@ -669,7 +669,7 @@ class MainController:
         guide_path = Path("models") / "ASK_MODE_GUIDE.md"
         include_ask_db = readme_path.exists() or guide_path.exists()
         if include_ask_db:
-            self.rag_controller.ensure_ask_readme_database(
+            self.rag_controller.ensure_ask_mode_readme_database(
                 readme_path, extra_paths=[guide_path]
             )
 

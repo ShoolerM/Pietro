@@ -71,9 +71,7 @@ class PlanningController(QtCore.QObject):
             current_outline: Current outline state
         """
         # Build context for planning
-        context = self._build_planning_context(
-            user_input, current_outline, attachments_text
-        )
+        context = self._build_planning_context(user_input, current_outline, attachments_text)
 
         # Set waiting state
         self.view.set_waiting(True)
@@ -322,9 +320,7 @@ class PlanningController(QtCore.QObject):
         try:
             result = StoryOutline(**data)
         except Exception as e:
-            self._append_planning_log(
-                f"❌ JSON outline parse failed: {e}\n↪ Please try again.\n"
-            )
+            self._append_planning_log(f"❌ JSON outline parse failed: {e}\n↪ Please try again.\n")
             return None
 
         discussion = result.discussion
@@ -342,9 +338,7 @@ class PlanningController(QtCore.QObject):
             result, discussion, suggestions = retry_result
 
         outline_text = self._format_outline_checklist(result.plot_points)
-        response_text = self._format_outline_response(
-            discussion, outline_text, suggestions
-        )
+        response_text = self._format_outline_response(discussion, outline_text, suggestions)
         return response_text, outline_text
 
     def _retry_outline_plot_points_json(
@@ -368,9 +362,7 @@ class PlanningController(QtCore.QObject):
         for _ in range(max_retries):
             retry_messages = messages + [HumanMessage(content=retry_instruction)]
             response = self.llm_controller.llm.invoke(retry_messages)
-            raw_text = (
-                response.content if hasattr(response, "content") else str(response)
-            )
+            raw_text = response.content if hasattr(response, "content") else str(response)
             try:
                 data = json.loads(raw_text)
                 retry_result = StoryOutline(**data)
@@ -381,9 +373,7 @@ class PlanningController(QtCore.QObject):
             if not retry_error:
                 merged_discussion = retry_result.discussion or discussion
                 merged_suggestions = (
-                    retry_result.suggestions
-                    if retry_result.suggestions
-                    else suggestions
+                    retry_result.suggestions if retry_result.suggestions else suggestions
                 )
                 return retry_result, merged_discussion, merged_suggestions
         return None
@@ -421,9 +411,7 @@ class PlanningController(QtCore.QObject):
             if not retry_error:
                 merged_discussion = retry_result.discussion or discussion
                 merged_suggestions = (
-                    retry_result.suggestions
-                    if retry_result.suggestions
-                    else suggestions
+                    retry_result.suggestions if retry_result.suggestions else suggestions
                 )
                 return retry_result, merged_discussion, merged_suggestions
         return None
@@ -534,14 +522,10 @@ class PlanningController(QtCore.QObject):
         # Estimate system prompt tokens (rough estimate)
         system_prompt_estimate = 800
         notes_tokens = (
-            self.story_model.estimate_token_count(existing_notes)
-            if existing_notes
-            else 0
+            self.story_model.estimate_token_count(existing_notes) if existing_notes else 0
         )
         outline_tokens = (
-            self.story_model.estimate_token_count(current_outline)
-            if current_outline
-            else 0
+            self.story_model.estimate_token_count(current_outline) if current_outline else 0
         )
         user_tokens = self.story_model.estimate_token_count(user_text)
 
@@ -559,17 +543,13 @@ class PlanningController(QtCore.QObject):
         max_rag_tokens = max(500, min(max_rag_tokens, 2000))
 
         # Query RAG databases with calculated budget
-        rag_context = self.rag_controller.query_databases(
-            user_text, max_tokens=max_rag_tokens
-        )
+        rag_context = self.rag_controller.query_databases(user_text, max_tokens=max_rag_tokens)
 
         # Build system message
         system_content = base_prompts.PLANNING_PROMPT
         # Add story context
         if story_context:
-            system_content += (
-                "\n\n=== EXISTING STORY CONTENT (WHAT HAS BEEN WRITTEN) ==="
-            )
+            system_content += "\n\n=== EXISTING STORY CONTENT (WHAT HAS BEEN WRITTEN) ==="
             system_content += f"\n{story_context}"
             system_content += (
                 "\n\nCRITICAL: Mark plot points as completed [x] ONLY if they describe events that are clearly written in the story text above. "
@@ -589,18 +569,14 @@ class PlanningController(QtCore.QObject):
 
         # Add RAG context
         if rag_context:
-            system_content += (
-                f"\n\nRELEVANT CONTEXT FROM KNOWLEDGE BASE:\n{rag_context}"
-            )
+            system_content += f"\n\nRELEVANT CONTEXT FROM KNOWLEDGE BASE:\n{rag_context}"
 
         if attachments_text:
             system_content += f"\n\nATTACHMENTS:\n{attachments_text}"
 
         return system_content
 
-    def start_outline_build(
-        self, outline: str, notes: str, supp_text: str, system_prompt: str
-    ):
+    def start_outline_build(self, outline: str, notes: str, supp_text: str, system_prompt: str):
         """Start outline-driven story generation.
 
         Args:
@@ -690,9 +666,7 @@ class PlanningController(QtCore.QObject):
             f"📝 PLOT POINT {state['current_task_index'] + 1}/{len(state['original_tasks'])} "
             f"(Chunk {state['task_chunk_count']}/{state['max_chunks_per_task']})\n"
         )
-        task_preview = (
-            current_task[:80] + "..." if len(current_task) > 80 else current_task
-        )
+        task_preview = current_task[:80] + "..." if len(current_task) > 80 else current_task
         self.view.append_logs(f"Task: {task_preview}\n")
         self.view.append_logs(f"{'─' * 60}\n\n")
 
@@ -751,9 +725,7 @@ class PlanningController(QtCore.QObject):
         """
         story_tokens = self.story_model.estimate_token_count(current_story)
         self.view.append_logs(f"\n📊 Story getting large ({story_tokens} tokens)\n")
-        self.view.append_logs(
-            "🔄 Running summarization to compress older content...\n\n"
-        )
+        self.view.append_logs("🔄 Running summarization to compress older content...\n\n")
 
         # Calculate token limits
         context_limit = self.settings_model.context_limit
@@ -816,11 +788,7 @@ class PlanningController(QtCore.QObject):
         system_tokens = self.story_model.estimate_token_count(state["system_prompt"])
 
         available_for_rag_and_story = (
-            context_limit
-            - story_tokens
-            - outline_tokens
-            - system_tokens
-            - output_reserve
+            context_limit - story_tokens - outline_tokens - system_tokens - output_reserve
         )
         # Use 25% for RAG in outline-driven mode (similar to auto-build)
         max_rag_tokens = int(available_for_rag_and_story * 0.25)
@@ -830,9 +798,7 @@ class PlanningController(QtCore.QObject):
         self.view.append_logs(
             f"🔍 Querying knowledge bases (budget: {max_rag_tokens:,} tokens)...\n"
         )
-        rag_context = self.rag_controller.query_databases(
-            current_task, max_tokens=max_rag_tokens
-        )
+        rag_context = self.rag_controller.query_databases(current_task, max_tokens=max_rag_tokens)
         state["last_rag_context"] = rag_context
 
         if rag_context:
@@ -845,9 +811,7 @@ class PlanningController(QtCore.QObject):
         query = self._build_chunk_query(state, story_for_llm, current_task, rag_context)
 
         # Generate
-        self.view.append_logs(
-            f"✍️ Generating {state['paragraphs_per_chunk']} paragraphs...\n\n"
-        )
+        self.view.append_logs(f"✍️ Generating {state['paragraphs_per_chunk']} paragraphs...\n\n")
         self.view.set_waiting(True)
 
         self.llm_controller.generate_story_chunk(
@@ -961,13 +925,11 @@ class PlanningController(QtCore.QObject):
             similarity_threshold=0.6,
         )
 
-        task_addressed = completion_status["completion_ratio"] >= 0.5
+        task_addressed = completion_status.completion_ratio >= 0.5
 
         if task_addressed or state["task_chunk_count"] >= state["max_chunks_per_task"]:
             if not task_addressed:
-                self.view.append_logs(
-                    "  • Max chunks reached for this plot point; moving on...\n"
-                )
+                self.view.append_logs("  • Max chunks reached for this plot point; moving on...\n")
             else:
                 self.view.append_logs("  ✓ Plot point addressed! Moving to next...\n")
             state["current_task_index"] += 1
@@ -979,9 +941,7 @@ class PlanningController(QtCore.QObject):
         if self._should_regenerate_notes(current_story):
             self.notes_controller.generate_notes_async(
                 current_story,
-                on_complete=lambda generated_notes, _: self._continue_after_notes(
-                    generated_notes
-                ),
+                on_complete=lambda generated_notes, _: self._continue_after_notes(generated_notes),
                 on_error=lambda _: self._continue_after_notes(),
                 clear_existing=True,
                 set_waiting_on_start=True,
@@ -1004,9 +964,7 @@ class PlanningController(QtCore.QObject):
 
         self.view.append_logs(f"\n\n{'=' * 60}\n")
         self.view.append_logs("\u2705 PLANNING BUILD COMPLETE\n")
-        self.view.append_logs(
-            f"All {len(state['original_tasks'])} plot points addressed.\n"
-        )
+        self.view.append_logs(f"All {len(state['original_tasks'])} plot points addressed.\n")
         self.view.append_logs(f"Total chunks generated: {state['chunk_count']}\n")
         self.view.append_logs(f"{'=' * 60}\n")
 

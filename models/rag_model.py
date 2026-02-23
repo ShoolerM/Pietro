@@ -1,8 +1,22 @@
 """Smart Model for managing ChromaDB databases and document retrieval."""
 
 import json
+from enum import Enum
 from pathlib import Path
 from base.observable import Observable
+
+
+class RAGEvent(Enum):
+    """Event types emitted by RAGModel via notify_observers."""
+
+    DATABASE_CREATED = "database_created"
+    FILE_ADDED = "file_added"
+    SELECTION_CHANGED = "selection_changed"
+    DATABASE_DELETED = "database_deleted"
+    SCORE_VARIANCE_THRESHOLD_CHANGED = "score_variance_threshold_changed"
+    FILENAME_BOOST_ENABLED_CHANGED = "filename_boost_enabled_changed"
+    MAX_FILENAME_CHUNKS_CHANGED = "max_filename_chunks_changed"
+    LEVENSHTEIN_THRESHOLD_CHANGED = "levenshtein_threshold_changed"
 
 
 class RAGModel(Observable):
@@ -167,7 +181,7 @@ class RAGModel(Observable):
             db_path.mkdir(exist_ok=True)
 
             self._save_data()
-            self.notify_observers("database_created", db_name)
+            self.notify_observers(RAGEvent.DATABASE_CREATED, db_name)
             return True, db_name
 
         if hidden and not self._databases[db_name].get("hidden"):
@@ -219,7 +233,7 @@ class RAGModel(Observable):
         db_path.mkdir(exist_ok=True)
 
         self._save_data()
-        self.notify_observers("database_created", db_name)
+        self.notify_observers(RAGEvent.DATABASE_CREATED, db_name)
 
         return True, db_name
 
@@ -244,7 +258,7 @@ class RAGModel(Observable):
         self._databases[db_name]["files"].append(file_path_str)
         self._save_data()
         if notify:
-            self.notify_observers("file_added", (db_name, file_path_str))
+            self.notify_observers(RAGEvent.FILE_ADDED, (db_name, file_path_str))
 
         return True, file_path_str
 
@@ -286,7 +300,7 @@ class RAGModel(Observable):
             self._selected_databases.add(db_name)
 
         self._save_data()  # Persist selection changes
-        self.notify_observers("selection_changed", list(self._selected_databases))
+        self.notify_observers(RAGEvent.SELECTION_CHANGED, list(self._selected_databases))
 
     def get_selected_databases(self):
         """Get list of selected database names.
@@ -315,7 +329,7 @@ class RAGModel(Observable):
         del self._databases[db_name]
         self._save_data()
 
-        self.notify_observers("database_deleted", db_name)
+        self.notify_observers(RAGEvent.DATABASE_DELETED, db_name)
 
         return True, f"Database '{db_name}' deleted"
 
@@ -353,7 +367,7 @@ class RAGModel(Observable):
             f"RAG score variance threshold set to: {self.score_variance_threshold:.2%}"
         )
         self.notify_observers(
-            "score_variance_threshold_changed", self.score_variance_threshold
+            RAGEvent.SCORE_VARIANCE_THRESHOLD_CHANGED, self.score_variance_threshold
         )
 
     def set_filename_boost_enabled(self, enabled):
@@ -366,7 +380,7 @@ class RAGModel(Observable):
         self._save_data()
         print(f"RAG filename boost enabled: {self.filename_boost_enabled}")
         self.notify_observers(
-            "filename_boost_enabled_changed", self.filename_boost_enabled
+            RAGEvent.FILENAME_BOOST_ENABLED_CHANGED, self.filename_boost_enabled
         )
 
     def set_max_filename_chunks(self, count):
@@ -378,7 +392,7 @@ class RAGModel(Observable):
         self.max_filename_chunks = max(0, min(5, int(count)))
         self._save_data()
         print(f"RAG max filename chunks set to: {self.max_filename_chunks}")
-        self.notify_observers("max_filename_chunks_changed", self.max_filename_chunks)
+        self.notify_observers(RAGEvent.MAX_FILENAME_CHUNKS_CHANGED, self.max_filename_chunks)
 
     def set_levenshtein_threshold(self, threshold):
         """Set the Levenshtein distance threshold for fuzzy filename matching.
@@ -390,5 +404,5 @@ class RAGModel(Observable):
         self._save_data()
         print(f"RAG Levenshtein threshold set to: {self.levenshtein_threshold}")
         self.notify_observers(
-            "levenshtein_threshold_changed", self.levenshtein_threshold
+            RAGEvent.LEVENSHTEIN_THRESHOLD_CHANGED, self.levenshtein_threshold
         )
