@@ -863,78 +863,125 @@ class LLMPanel(QtWidgets.QWidget):
         # Re-render the complete conversation with markdown
         self._render_planning_conversation()
 
+    @QtCore.pyqtSlot(str, str, str)
+    def apply_planning_message_html(self, role: str, content: str, html: str) -> None:
+        """Add a planning message using pre-computed HTML to avoid main-thread rendering lag.
+
+        The HTML string is built off the main thread (pure Python, no Qt calls);
+        this slot only updates the data model and calls setHtml() which is fast.
+
+        Args:
+            role: "user" or "assistant"
+            content: Raw message content (stored in conversation history)
+            html: Pre-rendered full-conversation HTML string
+        """
+        if not self._in_planning_mode:
+            return
+        self._planning_conversation.append({"role": role, "content": content})
+        self._apply_planning_html(html)
+
+    def _apply_planning_html(self, html: str) -> None:
+        """Set pre-built HTML on the planning display and restore scroll position."""
+        bar = self.thinking_text.verticalScrollBar()
+        was_at_bottom = self._is_view_at_bottom()
+        scroll_value = bar.value()
+        self.thinking_text.setHtml(html)
+        if was_at_bottom:
+            bar.setValue(bar.maximum())
+        else:
+            bar.setValue(min(scroll_value, bar.maximum()))
+
+    @staticmethod
+    def build_planning_html(
+        conversation: list,
+        rag_items: list,
+        rag_collapsed: bool = True,
+    ) -> str:
+        """Build the full planning-conversation HTML string.
+
+        Pure function — no Qt calls.  Safe to call from any thread.
+
+        Args:
+            conversation: List of {"role": str, "content": str} dicts.
+            rag_items: Display strings for the RAG items section.
+            rag_collapsed: Whether the RAG section is collapsed.
+
+        Returns:
+            Complete HTML string ready for QTextEdit.setHtml().
+        """
+        import markdown as _md
+
+        def _esc(text: str) -> str:
+            text = text.replace("&", "&amp;")
+            text = text.replace("<", "&lt;")
+            text = text.replace(">", "&gt;")
+            text = text.replace('"', "&quot;")
+            text = text.replace("'", "&#39;")
+            text = text.replace("\n", "<br>")
+            return text
+
+        html_parts = ['<div style="font-family: sans-serif; line-height: 1.6;">']
+
+        if rag_items:
+            arrow = "&gt;" if rag_collapsed else "v"
+            html_parts.append(
+                '<div style="margin-bottom: 12px;">'
+                f'<a href="planning-rag-toggle" style="color: #d9a6ff; font-weight: bold; text-decoration: none;">'
+                f"{arrow} RAG Items ({len(rag_items)})"
+                f"</a>"
+                "</div>"
+            )
+            if not rag_collapsed:
+                rag_text = _esc("\n".join(f"\u2022 {item}" for item in rag_items))
+                html_parts.append(
+                    f'<div style="margin-bottom: 12px; margin-left: 10px; color: #cbb6dd;">'
+                    f"{rag_text}"
+                    f"</div>"
+                )
+
+        total = len(conversation)
+        for idx, msg in enumerate(conversation):
+            role = msg["role"]
+            content = msg["content"]
+
+            if role != "user" and not content.strip():
+                continue
+
+            if role == "user":
+                html_parts.append(
+                    '<div style="margin-bottom: 15px;">'
+                    '<strong style="color: #4a9eff;">User:</strong><br>'
+                    f'<div style="margin-left: 10px;">{_esc(content)}</div>'
+                    "</div>"
+                )
+            else:
+                markdown_html = _md.markdown(content, extensions=["fenced_code", "tables", "nl2br"])
+                html_parts.append(
+                    '<div style="margin-bottom: 15px;">'
+                    '<strong style="color: #4eff9e;">AI:</strong><br>'
+                    f'<div style="margin-left: 10px;">{markdown_html}</div>'
+                    "</div>"
+                )
+
+            if idx < total - 1:
+                html_parts.append(
+                    '<hr style="border: 0; border-top: 1px solid rgba(255,255,255,0.12); margin: 10px 0;" />'
+                )
+
+        html_parts.append("</div>")
+        return "".join(html_parts)
+
     def _render_planning_conversation(self):
         """Render the complete planning conversation with markdown."""
         if not self._in_planning_mode:
             return
-
         try:
-            import markdown
-
-            bar = self.thinking_text.verticalScrollBar()
-            was_at_bottom = self._is_view_at_bottom()
-            scroll_value = bar.value()
-            html_parts = []
-            html_parts.append('<div style="font-family: sans-serif; line-height: 1.6;">')
-
-            if self._rag_items:
-                rag_items_text = "\n".join(f"• {item}" for item in self._rag_items)
-                arrow = ">" if self._planning_rag_collapsed else "v"
-                html_parts.append(
-                    '<div style="margin-bottom: 12px;">'
-                    f'<a href="planning-rag-toggle" style="color: #d9a6ff; font-weight: bold; text-decoration: none;">'
-                    f"{self._escape_html(f'{arrow} RAG Items ({len(self._rag_items)})')}"
-                    f"</a>"
-                    "</div>"
-                )
-                if not self._planning_rag_collapsed:
-                    html_parts.append(
-                        f'<div style="margin-bottom: 12px; margin-left: 10px; color: #cbb6dd;">'
-                        f"{self._escape_html(rag_items_text)}"
-                        f"</div>"
-                    )
-
-            total_messages = len(self._planning_conversation)
-            for idx, msg in enumerate(self._planning_conversation):
-                role = msg["role"]
-                content = msg["content"]
-
-                if role != "user" and not content.strip():
-                    continue
-
-                if role == "user":
-                    # User messages in blue
-                    html_parts.append(
-                        '<div style="margin-bottom: 15px;">'
-                        '<strong style="color: #4a9eff;">User:</strong><br>'
-                        f'<div style="margin-left: 10px;">{self._escape_html(content)}</div>'
-                        "</div>"
-                    )
-                else:
-                    # Assistant messages with markdown rendering
-                    markdown_html = markdown.markdown(
-                        content, extensions=["fenced_code", "tables", "nl2br"]
-                    )
-                    html_parts.append(
-                        '<div style="margin-bottom: 15px;">'
-                        '<strong style="color: #4eff9e;">AI:</strong><br>'
-                        f'<div style="margin-left: 10px;">{markdown_html}</div>'
-                        "</div>"
-                    )
-
-                if idx < total_messages - 1:
-                    html_parts.append(
-                        '<hr style="border: 0; border-top: 1px solid rgba(255,255,255,0.12); margin: 10px 0;" />'
-                    )
-
-            html_parts.append("</div>")
-
-            self.thinking_text.setHtml("".join(html_parts))
-            # Restore scroll position immediately after setHtml
-            if was_at_bottom:
-                bar.setValue(bar.maximum())
-            else:
-                bar.setValue(min(scroll_value, bar.maximum()))
+            html = LLMPanel.build_planning_html(
+                self._planning_conversation,
+                self._rag_items,
+                self._planning_rag_collapsed,
+            )
+            self._apply_planning_html(html)
         except Exception as e:
             print(f"Error rendering planning conversation: {e}")
 

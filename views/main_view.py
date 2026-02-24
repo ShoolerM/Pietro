@@ -33,48 +33,26 @@ class MainView(QtWidgets.QWidget):
     rag_refresh_clicked = QtCore.pyqtSignal()
     rag_delete_database_clicked = QtCore.pyqtSignal(str)  # database name
     rag_max_chunks_changed = QtCore.pyqtSignal(int)  # max chunks for auto-build
-    rag_summary_chunk_size_changed = QtCore.pyqtSignal(
-        int
-    )  # max raw tokens for summarization
-    rag_score_threshold_changed = QtCore.pyqtSignal(
-        float
-    )  # score variance threshold percentage
-    rag_filename_boost_enabled_changed = QtCore.pyqtSignal(
-        bool
-    )  # enable filename boosting
-    rag_max_filename_chunks_changed = QtCore.pyqtSignal(
-        int
-    )  # max chunks per matched file
+    rag_summary_chunk_size_changed = QtCore.pyqtSignal(int)  # max raw tokens for summarization
+    rag_score_threshold_changed = QtCore.pyqtSignal(float)  # score variance threshold percentage
+    rag_filename_boost_enabled_changed = QtCore.pyqtSignal(bool)  # enable filename boosting
+    rag_max_filename_chunks_changed = QtCore.pyqtSignal(int)  # max chunks per matched file
     rag_levenshtein_threshold_changed = QtCore.pyqtSignal(int)  # fuzzy match distance
     rag_settings_requested = QtCore.pyqtSignal()  # request to show settings dialog
-    prompt_selections_changed = QtCore.pyqtSignal(
-        list, str
-    )  # supplemental_files, system_prompt
+    prompt_selections_changed = QtCore.pyqtSignal(list, str)  # supplemental_files, system_prompt
     summarization_prompt_requested = (
         QtCore.pyqtSignal()
     )  # request to show summarization prompt settings
-    notes_prompt_requested = (
-        QtCore.pyqtSignal()
-    )  # request to show notes prompt settings
+    notes_prompt_requested = QtCore.pyqtSignal()  # request to show notes prompt settings
     ask_prompt_requested = QtCore.pyqtSignal()  # request to show ask prompt settings
-    general_settings_requested = (
-        QtCore.pyqtSignal()
-    )  # request to show general settings dialog
-    model_settings_requested = (
-        QtCore.pyqtSignal()
-    )  # request to show model settings dialog
+    general_settings_requested = QtCore.pyqtSignal()  # request to show general settings dialog
+    model_settings_requested = QtCore.pyqtSignal()  # request to show model settings dialog
     mode_changed = QtCore.pyqtSignal(str)  # mode changed in bottom control panel
     file_saved = QtCore.pyqtSignal(str, str)
     font_size_changed = QtCore.pyqtSignal(int)
-    inference_settings_requested = (
-        QtCore.pyqtSignal()
-    )  # request to show inference settings dialog
-    update_summary_requested = (
-        QtCore.pyqtSignal()
-    )  # request to regenerate story summary
-    toggle_summarize_prompts_requested = (
-        QtCore.pyqtSignal()
-    )  # forwarded from story panel
+    inference_settings_requested = QtCore.pyqtSignal()  # request to show inference settings dialog
+    update_summary_requested = QtCore.pyqtSignal()  # request to regenerate story summary
+    toggle_summarize_prompts_requested = QtCore.pyqtSignal()  # forwarded from story panel
     toggle_smart_mode_requested = QtCore.pyqtSignal()  # forwarded from story panel
     auto_build_story_requested = (
         QtCore.pyqtSignal()
@@ -126,27 +104,19 @@ class MainView(QtWidgets.QWidget):
             lambda: self.summarization_prompt_requested.emit()
         )
         notes_prompt_action = prompts_menu.addAction("Notes Prompt")
-        notes_prompt_action.triggered.connect(
-            lambda: self.notes_prompt_requested.emit()
-        )
+        notes_prompt_action.triggered.connect(lambda: self.notes_prompt_requested.emit())
         ask_prompt_action = prompts_menu.addAction("Ask Prompt")
         ask_prompt_action.triggered.connect(lambda: self.ask_prompt_requested.emit())
 
         rag_menu = menu_bar.addMenu("RAG")
         rag_settings_action = rag_menu.addAction("RAG Settings...")
-        rag_settings_action.triggered.connect(
-            lambda: self.rag_settings_requested.emit()
-        )
+        rag_settings_action.triggered.connect(lambda: self.rag_settings_requested.emit())
 
         settings_menu = menu_bar.addMenu("Settings")
         general_settings_action = settings_menu.addAction("General...")
-        general_settings_action.triggered.connect(
-            lambda: self.general_settings_requested.emit()
-        )
+        general_settings_action.triggered.connect(lambda: self.general_settings_requested.emit())
         model_settings_action = settings_menu.addAction("Model Settings...")
-        model_settings_action.triggered.connect(
-            lambda: self.model_settings_requested.emit()
-        )
+        model_settings_action.triggered.connect(lambda: self.model_settings_requested.emit())
 
         # IDE-style layout:
         # Left side: Story (top) | Prompts (bottom) - vertical split
@@ -188,18 +158,12 @@ class MainView(QtWidgets.QWidget):
         self.story_panel.file_saved.connect(self.file_saved.emit)
         self.story_panel.font_size_changed.connect(self.font_size_changed.emit)
         self.story_panel.toggle_thinking_requested.connect(self._toggle_thinking_panel)
-        self.story_panel.update_summary_requested.connect(
-            self.update_summary_requested.emit
-        )
+        self.story_panel.update_summary_requested.connect(self.update_summary_requested.emit)
         self.story_panel.toggle_summarize_prompts_requested.connect(
             self.toggle_summarize_prompts_requested.emit
         )
-        self.story_panel.toggle_smart_mode_requested.connect(
-            self.toggle_smart_mode_requested.emit
-        )
-        self.story_panel.auto_build_story_requested.connect(
-            self.auto_build_story_requested.emit
-        )
+        self.story_panel.toggle_smart_mode_requested.connect(self.toggle_smart_mode_requested.emit)
+        self.story_panel.auto_build_story_requested.connect(self.auto_build_story_requested.emit)
         self.story_panel.override_selection_requested.connect(
             self.override_selection_requested.emit
         )
@@ -226,33 +190,21 @@ class MainView(QtWidgets.QWidget):
         self.utilities_panel.supplemental_refresh_clicked.connect(
             self.supplemental_refresh_clicked.emit
         )
-        self.utilities_panel.supplemental_add_clicked.connect(
-            self.supplemental_add_clicked.emit
-        )
-        self.utilities_panel.supplemental_file_opened.connect(
-            self.supplemental_file_opened.emit
-        )
-        self.utilities_panel.system_refresh_clicked.connect(
-            self.system_refresh_clicked.emit
-        )
+        self.utilities_panel.supplemental_add_clicked.connect(self.supplemental_add_clicked.emit)
+        self.utilities_panel.supplemental_file_opened.connect(self.supplemental_file_opened.emit)
+        self.utilities_panel.system_refresh_clicked.connect(self.system_refresh_clicked.emit)
         self.utilities_panel.system_add_clicked.connect(self.system_add_clicked.emit)
         self.utilities_panel.system_file_opened.connect(self.system_file_opened.emit)
         self.utilities_panel.rag_create_database_clicked.connect(
             self.rag_create_database_clicked.emit
         )
-        self.utilities_panel.rag_add_files_clicked.connect(
-            self.rag_add_files_clicked.emit
-        )
-        self.utilities_panel.rag_database_toggled.connect(
-            self.rag_database_toggled.emit
-        )
+        self.utilities_panel.rag_add_files_clicked.connect(self.rag_add_files_clicked.emit)
+        self.utilities_panel.rag_database_toggled.connect(self.rag_database_toggled.emit)
         self.utilities_panel.rag_refresh_clicked.connect(self.rag_refresh_clicked.emit)
         self.utilities_panel.rag_delete_database_clicked.connect(
             self.rag_delete_database_clicked.emit
         )
-        self.utilities_panel.rag_max_chunks_changed.connect(
-            self.rag_max_chunks_changed.emit
-        )
+        self.utilities_panel.rag_max_chunks_changed.connect(self.rag_max_chunks_changed.emit)
         self.utilities_panel.rag_summary_chunk_size_changed.connect(
             self.rag_summary_chunk_size_changed.emit
         )
@@ -268,12 +220,8 @@ class MainView(QtWidgets.QWidget):
         self.utilities_panel.rag_levenshtein_threshold_changed.connect(
             self.rag_levenshtein_threshold_changed.emit
         )
-        self.utilities_panel.rag_settings_requested.connect(
-            self.rag_settings_requested.emit
-        )
-        self.utilities_panel.prompt_selections_changed.connect(
-            self.prompt_selections_changed.emit
-        )
+        self.utilities_panel.rag_settings_requested.connect(self.rag_settings_requested.emit)
+        self.utilities_panel.prompt_selections_changed.connect(self.prompt_selections_changed.emit)
         self.utilities_panel.font_size_changed.connect(self.font_size_changed.emit)
 
     def _toggle_thinking_panel(self):
@@ -328,6 +276,7 @@ class MainView(QtWidgets.QWidget):
         """Clear story content."""
         self.story_panel.clear_story_content()
 
+    @QtCore.pyqtSlot(str)
     def append_logs(self, text):
         """Append text to Logs panel."""
         self.utilities_panel.append_logs(text + "\n")
@@ -410,6 +359,7 @@ class MainView(QtWidgets.QWidget):
         """Set RAG selection for the LLM panel."""
         self.llm_panel.set_rag_selection(databases)
 
+    @QtCore.pyqtSlot(list)
     def set_rag_items(self, items):
         """Set RAG items for the LLM panel."""
         self.llm_panel.set_rag_items(items)
@@ -436,14 +386,10 @@ class MainView(QtWidgets.QWidget):
             # Allow multiple selection
             file_view = dialog.findChild(QtWidgets.QListView, "listView")
             if file_view:
-                file_view.setSelectionMode(
-                    QtWidgets.QAbstractItemView.ExtendedSelection
-                )
+                file_view.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
             tree_view = dialog.findChild(QtWidgets.QTreeView)
             if tree_view:
-                tree_view.setSelectionMode(
-                    QtWidgets.QAbstractItemView.ExtendedSelection
-                )
+                tree_view.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
 
             if dialog.exec() == QtWidgets.QDialog.Accepted:
                 return dialog.selectedFiles()
@@ -454,9 +400,7 @@ class MainView(QtWidgets.QWidget):
             )
             return file_paths
         else:
-            file_path, _ = QtWidgets.QFileDialog.getOpenFileName(
-                self, title, "", "All Files (*.*)"
-            )
+            file_path, _ = QtWidgets.QFileDialog.getOpenFileName(self, title, "", "All Files (*.*)")
             return [file_path] if file_path else []
 
     def open_file_tab(self, file_path):
