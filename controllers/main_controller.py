@@ -169,6 +169,7 @@ class MainController:
         )
         self.view.llm_panel.redo_section_requested.connect(self._on_redo_section)
         self.view.llm_panel.uncheck_section_requested.connect(self._on_uncheck_section)
+        self.view.llm_panel.check_section_requested.connect(self._on_check_section)
         self.view.llm_panel.outline_changed.connect(self._on_outline_changed)
 
     def _connect_observers(self):
@@ -2007,8 +2008,10 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
         self.story_model.save_to_history()
         self._redo_section_index = section_index
 
-        # Mark the old section text red and position cursor for green streaming
-        self.view.start_text_update(start, end)
+        # Delegate to the planning controller which sets up the diff UI AND starts the LLM.
+        # _redo_section_index is already set above so _on_update_accepted will tick the
+        # correct checkbox when the user accepts the generated text.
+        self.planning_controller.rewrite_section_with_diff(section_index, self._on_redo_complete)
 
     def _on_uncheck_section(self, section_index: int) -> None:
         """Handle a request to un-check a completed outline section.
@@ -2044,7 +2047,44 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
                 "Click ▶ Continue to resume writing from this section.\n"
             )
 
-        self.planning_controller.rewrite_section_with_diff(section_index, self._on_redo_complete)
+    def _on_check_section(self, section_index: int) -> None:
+        """Handle the user manually marking a pending/active section as done.
+
+        Updates the tracker display and, when a build state is available, advances
+        the current task index past this section so Continue picks up from the next one.
+
+        Args:
+            section_index: Zero-based index of the section to mark as written.
+        """
+        # Update tracker visual
+        self.view.llm_panel.outline_tracker.mark_complete(section_index)
+
+        # Keep build state in sync so Continue resumes from the right place
+        build_state: dict | None = self.planning_model.build_state
+        if build_state:
+            # Only advance past this section if it hasn't been passed already
+            if build_state["current_task_index"] <= section_index:
+                build_state["current_task_index"] = section_index + 1
+                build_state["task_chunk_count"] = 0
+                build_state["remaining_tasks"] = build_state["original_tasks"][
+                    section_index + 1 :
+                ].copy()
+
+            # Set the next section active if there is one
+            next_idx: int = build_state["current_task_index"]
+            if next_idx < len(build_state.get("original_tasks", [])):
+                self.view.llm_panel.outline_tracker.set_active(next_idx)
+
+            # Re-enable the Continue button
+            self.view.llm_panel.set_section_writing(False)
+
+            task_label: str = ""
+            if section_index < len(build_state["original_tasks"]):
+                task: str = build_state["original_tasks"][section_index]
+                task_label = f' "{task[:60]}{"..." if len(task) > 60 else ""}"'
+            self.view.append_logs(
+                f"\n✓ Section {section_index + 1}{task_label} manually marked as written.\n"
+            )
 
     def show(self):
         """Show the main view."""

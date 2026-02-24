@@ -28,6 +28,9 @@ class LLMPanel(QtWidgets.QWidget):
     uncheck_section_requested = QtCore.pyqtSignal(
         int
     )  # Emits section index when [✓] is clicked to un-check
+    check_section_requested = QtCore.pyqtSignal(
+        int
+    )  # Emits section index when [ ] / [▶] is clicked to manually mark done
     outline_changed = QtCore.pyqtSignal(str)  # Emits when outline is edited
 
     def __init__(self):
@@ -98,6 +101,7 @@ class LLMPanel(QtWidgets.QWidget):
         self.outline_tracker.hide()
         self.outline_tracker.redo_requested.connect(self.redo_section_requested)
         self.outline_tracker.uncheck_requested.connect(self.uncheck_section_requested)
+        self.outline_tracker.check_requested.connect(self.check_section_requested)
         # Connect section edits so the stored outline is kept up to date
         self.outline_tracker.section_edited.connect(self._on_outline_section_edited)
         layout.addWidget(self.outline_tracker)

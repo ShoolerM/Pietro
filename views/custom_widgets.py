@@ -141,6 +141,8 @@ class OutlineSectionRow(QtWidgets.QWidget):
     redo_clicked = QtCore.pyqtSignal()
     # Emitted when the user clicks the [✓] icon on a completed section to un-check it
     uncheck_clicked = QtCore.pyqtSignal()
+    # Emitted when the user clicks [ ] / [▶] on a pending/active section to mark it done
+    check_clicked = QtCore.pyqtSignal()
     # Emitted when the user edits the section title/details; carries (new_title, new_details)
     section_edited = QtCore.pyqtSignal(str, str)
 
@@ -253,6 +255,11 @@ class OutlineSectionRow(QtWidgets.QWidget):
             self._status_label.setStyleSheet(base_style + "QPushButton:hover { color: #ff8888; }")
             self._status_label.setCursor(QtCore.Qt.PointingHandCursor)
             self._status_label.setToolTip("Click to mark as not yet written")
+        elif self._status in ("pending", "active"):
+            # Add green hover tint to signal that clicking will mark the section done
+            self._status_label.setStyleSheet(base_style + "QPushButton:hover { color: #4eff9e; }")
+            self._status_label.setCursor(QtCore.Qt.PointingHandCursor)
+            self._status_label.setToolTip("Click to mark as written")
         else:
             self._status_label.setStyleSheet(base_style)
             self._status_label.setCursor(QtCore.Qt.ArrowCursor)
@@ -261,9 +268,11 @@ class OutlineSectionRow(QtWidgets.QWidget):
         self._title_label.setStyleSheet(f"color: {title_color};")
 
     def _on_status_clicked(self) -> None:
-        """Emit uncheck_clicked when the [✓] icon is clicked on a completed section."""
+        """Emit the appropriate signal when the status icon is clicked."""
         if self._status == "done":
             self.uncheck_clicked.emit()
+        elif self._status in ("pending", "active"):
+            self.check_clicked.emit()
 
     def _on_edit_clicked(self) -> None:
         """Open a modal dialog to let the user edit the section title and details."""
@@ -394,6 +403,8 @@ class OutlineTrackerWidget(QtWidgets.QWidget):
     redo_requested = QtCore.pyqtSignal(int)
     # Emitted when the user un-checks a completed section; carries the section index
     uncheck_requested = QtCore.pyqtSignal(int)
+    # Emitted when the user manually checks a pending/active section; carries the section index
+    check_requested = QtCore.pyqtSignal(int)
     # Emitted when the user edits a section's title/details; carries (index, title, details)
     section_edited = QtCore.pyqtSignal(int, str, str)
 
@@ -545,6 +556,7 @@ class OutlineTrackerWidget(QtWidgets.QWidget):
             row = OutlineSectionRow(i, sec["title"], sec["details"], sec["status"])
             row.redo_clicked.connect(lambda _checked=False, idx=i: self.redo_requested.emit(idx))
             row.uncheck_clicked.connect(lambda idx=i: self.uncheck_requested.emit(idx))
+            row.check_clicked.connect(lambda idx=i: self.check_requested.emit(idx))
             # Wire section edit signal to internal handler so we can update _sections data
             row.section_edited.connect(
                 lambda title, details, idx=i: self._on_row_edited(idx, title, details)
