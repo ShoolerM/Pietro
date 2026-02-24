@@ -8,12 +8,10 @@ Handles all planning mode logic including:
 
 import threading
 import traceback
-from typing import Optional, Dict, Any, Callable
+from typing import Optional, Dict, Any, Callable, List
 from PyQt5 import QtCore
 
-from models import base_prompts
 from models.planning_model import PlanningModel
-from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 
 
 class PlanningController(QtCore.QObject):
@@ -30,6 +28,7 @@ class PlanningController(QtCore.QObject):
         summary_model,
         notes_controller,
         view,
+        baml_controller=None,
     ):
         super().__init__()
         self.planning_model = planning_model
@@ -41,6 +40,7 @@ class PlanningController(QtCore.QObject):
         self.summary_model = summary_model
         self.notes_controller = notes_controller
         self.view = view
+        self.baml_controller = baml_controller
 
         # Callbacks for delegation back to main controller
         self._on_notes_ready_callback: Optional[Callable] = None
@@ -85,143 +85,23 @@ class PlanningController(QtCore.QObject):
         thread.start()
 
     def _planning_thread_for_panel(self, user_input, context, conversation_history):
-        """Background thread for planning LLM interaction (panel version).
+        """Background thread for all planning LLM interaction.
 
-        Args:
-            user_input: User's message
-            context: Built context string (system message)
-            conversation_history: Full conversation history
+        Delegates to _run_planning_request which makes a single BAML Plan() call.
+        The LLM decides whether to chat or generate an outline.
         """
         try:
-            # Build messages for LLM
-            messages = [
-                SystemMessage(content=context),
-            ]
-
-            # Add conversation history (excluding the just-added user message)
-            for msg in conversation_history[:-1]:
-                if msg["role"] == "user":
-                    messages.append(HumanMessage(content=msg["content"]))
-                else:
-                    messages.append(AIMessage(content=msg["content"]))
-
-            # Add current user message
-            messages.append(HumanMessage(content=user_input))
-
-            # Detect if user is asking for an outline
-            is_outline_request = self._is_outline_request(user_input)
-
-            # Use structured output for outline requests (strict, no parsing fallback)
-            if is_outline_request:
-                response_buffer = []
-
-                # Stream response to panel
-                for chunk in self.llm_controller.llm.stream(messages):
-                    token = chunk.content
-                    response_buffer.append(token)
-                    QtCore.QMetaObject.invokeMethod(
-                        self.view.llm_panel,
-                        "append_llm_panel_text",
-                        QtCore.Qt.QueuedConnection,
-                        QtCore.Q_ARG(str, token),
-                    )
-
-                # Add newline after response
-                QtCore.QMetaObject.invokeMethod(
-                    self.view.llm_panel,
-                    "append_llm_panel_text",
-                    QtCore.Qt.QueuedConnection,
-                    QtCore.Q_ARG(str, "\n\n"),
-                )
-
-                response_text = "".join(response_buffer)
-
-                # Add to conversation
-                QtCore.QMetaObject.invokeMethod(
-                    self.view.llm_panel,
-                    "add_planning_message",
-                    QtCore.Qt.QueuedConnection,
-                    QtCore.Q_ARG(str, "assistant"),
-                    QtCore.Q_ARG(str, response_text),
-                )
-
-                # Parse structured outline in a follow-up pass
-                outline_result = self._request_structured_outline(messages)
-                if outline_result is not None:
-                    _, outline_text = outline_result
-                    QtCore.QMetaObject.invokeMethod(
-                        self.view.llm_panel,
-                        "set_current_outline",
-                        QtCore.Qt.QueuedConnection,
-                        QtCore.Q_ARG(str, outline_text),
-                    )
-                    self.settings_model.save_planning_conversation(
-                        self.view.llm_panel.get_planning_conversation(),
-                        outline_text,
-                    )
-                else:
-                    self._append_planning_log(
-                        "⚠️ Outline parsing failed; using streamed response only.\n"
-                    )
-
-                return
-
-            # Fallback: Stream response to panel (for non-outline or if structured failed)
-            response_buffer = []
-
-            # Add assistant prefix to panel
-            QtCore.QMetaObject.invokeMethod(
-                self.view.llm_panel,
-                "append_llm_panel_text",
-                QtCore.Qt.QueuedConnection,
-                QtCore.Q_ARG(str, "\n**Assistant:** "),
-            )
-
-            # Invoke LLM with streaming
-            for chunk in self.llm_controller.llm.stream(messages):
-                token = chunk.content
-                response_buffer.append(token)
-                # Stream to LLM panel
-                QtCore.QMetaObject.invokeMethod(
-                    self.view.llm_panel,
-                    "append_llm_panel_text",
-                    QtCore.Qt.QueuedConnection,
-                    QtCore.Q_ARG(str, token),
-                )
-
-            # Add newline after response
-            QtCore.QMetaObject.invokeMethod(
-                self.view.llm_panel,
-                "append_llm_panel_text",
-                QtCore.Qt.QueuedConnection,
-                QtCore.Q_ARG(str, "\n\n"),
-            )
-
-            # Complete response text
-            response_text = "".join(response_buffer)
-
-            # Add to panel's conversation
-            QtCore.QMetaObject.invokeMethod(
-                self.view.llm_panel,
-                "add_planning_message",
-                QtCore.Qt.QueuedConnection,
-                QtCore.Q_ARG(str, "assistant"),
-                QtCore.Q_ARG(str, response_text),
-            )
-
-            # Save conversation via settings model (thread-safe file I/O)
-            self.settings_model.save_planning_conversation(
-                self.view.llm_panel.get_planning_conversation(),
-                self.view.llm_panel.get_current_outline(),
-            )
-
+            history_str = self._format_conversation_history(conversation_history[:-1])
+            base_url = self.settings_model.base_url
+            model = self.settings_model.last_model
+            api_key = self.settings_model.api_key
+            self._run_planning_request(user_input, context, history_str, base_url, model, api_key)
         except Exception as e:
             error_msg = f"\n\n❌ Error: {str(e)}\n\n"
             self._append_planning_error(error_msg)
             print(f"Planning thread error: {e}")
             traceback.print_exc()
         finally:
-            # Hide waiting indicator
             QtCore.QMetaObject.invokeMethod(
                 self.view,
                 "set_waiting",
@@ -229,245 +109,164 @@ class PlanningController(QtCore.QObject):
                 QtCore.Q_ARG(bool, False),
             )
 
-    def _is_outline_request(self, user_input: str) -> bool:
-        """Check if user request is asking for an outline."""
-        outline_keywords = [
-            "outline",
-            "plan",
-            "structure",
-            "plot points",
-            "story beats",
-        ]
-        lower_text = user_input.lower()
-        return any(keyword in lower_text for keyword in outline_keywords)
+    def _run_planning_request(
+        self,
+        user_input: str,
+        context: str,
+        history_str: str,
+        base_url: str,
+        model: str,
+        api_key: str,
+    ) -> None:
+        """Execute a BAML Plan() call. The LLM decides chat vs outline.
 
-    def _request_structured_outline(self, messages):
-        """Request a structured outline with strict retries for invalid plot points.
-
-        Returns:
-            Tuple[str, str]: (response_text, outline_text) or None on failure
+        - Chat: streams text deltas to panel progressively.
+        - Outline: emits each new plot point as '- [ ] ...' as it arrives.
+        - If action='outline' and SAP extracts nothing, retries up to 3 times.
         """
-        from models.planning_model import StoryOutline
+        MAX_ATTEMPTS = 3
+        _prev_msg_len: List[int] = [0]
+        _prev_pts_count: List[int] = [0]
+        _prefix_emitted: List[bool] = [False]
 
-        # Tool-based structured output can trigger unsupported tool_choice errors.
-        # Use strict JSON-only outlines for reliability.
-        return self._request_outline_via_json(messages)
+        def on_partial(partial) -> None:
+            action = getattr(partial, "action", None)
+            if not _prefix_emitted[0]:
+                if action == "chat":
+                    self._emit_to_panel("\n**Assistant:** ")
+                _prefix_emitted[0] = True
+            if action == "chat":
+                msg = getattr(partial, "message", None) or ""
+                delta = msg[_prev_msg_len[0] :]
+                if delta:
+                    self._emit_to_panel(delta)
+                _prev_msg_len[0] = len(msg)
+            elif action == "outline":
+                pts = getattr(partial, "plot_points", None) or []
+                for point in pts[_prev_pts_count[0] :]:
+                    checkbox = "[x]" if point.completed else "[ ]"
+                    self._emit_to_panel(f"- {checkbox} **{point.description}**\n")
+                    details = getattr(point, "details", None)
+                    if details:
+                        self._emit_to_panel(f"  {details}\n")
+                _prev_pts_count[0] = len(pts)
 
-    def _build_structured_outline_llm(self, schema, fallback: bool = False):
-        """Build a structured-output LLM for outlines with a safe method.
+        result = None
+        for attempt in range(1, MAX_ATTEMPTS + 1):
+            _prev_msg_len[0] = 0
+            _prev_pts_count[0] = 0
+            _prefix_emitted[0] = False
+            if attempt > 1:
+                self._emit_to_panel(f"\n\n⚠️ Attempt {attempt}/{MAX_ATTEMPTS}...\n\n")
+
+            result = self.baml_controller.plan(
+                context=context,
+                conversation_history=history_str,
+                user_message=user_input,
+                base_url=base_url,
+                model=model,
+                api_key=api_key,
+                on_partial=on_partial,
+            )
+
+            if result is None:
+                continue
+            action = getattr(result, "action", None)
+            if action == "chat":
+                break  # chat always accepted
+            if action == "outline":
+                if getattr(result, "plot_points", None):
+                    break  # got plot points, success
+                # SAP extracted nothing — retry
+
+        if result is None:
+            self._append_planning_error(
+                f"\n\n❌ Planning failed after {MAX_ATTEMPTS} attempts. Please try again.\n\n"
+            )
+            return
+
+        self._emit_to_panel("\n\n")
+        action = getattr(result, "action", None)
+
+        if action == "chat":
+            message = getattr(result, "message", None) or ""
+            QtCore.QMetaObject.invokeMethod(
+                self.view.llm_panel,
+                "add_planning_message",
+                QtCore.Qt.QueuedConnection,
+                QtCore.Q_ARG(str, "assistant"),
+                QtCore.Q_ARG(str, message),
+            )
+            self.settings_model.save_planning_conversation(
+                self.view.llm_panel.get_planning_conversation(),
+                self.view.llm_panel.get_current_outline(),
+            )
+
+        elif action == "outline":
+            plot_points = getattr(result, "plot_points", None) or []
+            if not plot_points:
+                self._append_planning_error(
+                    f"\n\n❌ Failed to extract outline after {MAX_ATTEMPTS} attempts. Please try again.\n\n"
+                )
+                return
+            outline_text = self._format_outline_checklist(plot_points)
+            QtCore.QMetaObject.invokeMethod(
+                self.view.llm_panel,
+                "add_planning_message",
+                QtCore.Qt.QueuedConnection,
+                QtCore.Q_ARG(str, "assistant"),
+                QtCore.Q_ARG(str, outline_text),
+            )
+            QtCore.QMetaObject.invokeMethod(
+                self.view.llm_panel,
+                "set_current_outline",
+                QtCore.Qt.QueuedConnection,
+                QtCore.Q_ARG(str, outline_text),
+            )
+            self.settings_model.save_planning_conversation(
+                self.view.llm_panel.get_planning_conversation(),
+                outline_text,
+            )
+        else:
+            self._append_planning_error(f"\n\n❌ Unknown planner action: {action!r}\n\n")
+
+    def _format_conversation_history(self, history: list) -> str:
+        """Format conversation history as Human:/Assistant: text for BAML templates.
 
         Args:
-            schema: Pydantic schema to enforce
-            fallback: If True, use alternate method
+            history: List of dicts with 'role' ('user'/'assistant') and 'content' keys.
 
         Returns:
-            Structured LLM or None if unsupported
+            Newline-joined 'Human: ...' / 'Assistant: ...' string, or empty string.
         """
-        try:
-            import inspect
-
-            with_structured = self.llm_controller.llm.with_structured_output
-            supports_method = "method" in inspect.signature(with_structured).parameters
-
-            if supports_method:
-                # Prefer function_calling when available; fallback disables tool use
-                if not fallback:
-                    return with_structured(schema, method="function_calling")
-                return None
-
-            # If method isn't supported, avoid tool-based structured output
-            return None
-        except Exception as e:
-            self._append_planning_log(f"❌ Structured output init failed: {e}\n")
-            return None
-
-    def _request_outline_via_json(self, messages):
-        """Request outline via strict JSON-only response and validate with schema.
-
-        Returns:
-            Tuple[str, str]: (response_text, outline_text) or None on failure
-        """
-        from models.planning_model import StoryOutline
-        import json
-
-        json_instructions = (
-            "Return ONLY valid JSON that matches this schema: "
-            "{discussion: string|null, plot_points: [{description: string, completed: boolean}], "
-            "suggestions: [string]}. No extra text."
-        )
-
-        json_messages = messages + [HumanMessage(content=json_instructions)]
-        response = self.llm_controller.llm.invoke(json_messages)
-
-        raw_text = response.content if hasattr(response, "content") else str(response)
-        try:
-            data = json.loads(raw_text)
-        except Exception:
-            extracted = self._extract_json_from_text(raw_text)
-            if extracted:
-                try:
-                    data = json.loads(extracted)
-                except Exception as e:
-                    self._append_planning_log(
-                        f"❌ JSON outline parse failed: {e}\n↪ Please try again.\n"
-                    )
-                    return None
-            else:
-                self._append_planning_log(
-                    "❌ JSON outline parse failed: empty/invalid response\n↪ Please try again.\n"
-                )
-                return None
-        try:
-            result = StoryOutline(**data)
-        except Exception as e:
-            self._append_planning_log(f"❌ JSON outline parse failed: {e}\n↪ Please try again.\n")
-            return None
-
-        discussion = result.discussion
-        suggestions = result.suggestions or []
-        error = self._validate_plot_points(result.plot_points)
-        if error:
-            retry_result = self._retry_outline_plot_points_json(
-                messages,
-                error,
-                discussion,
-                suggestions,
-            )
-            if retry_result is None:
-                return None
-            result, discussion, suggestions = retry_result
-
-        outline_text = self._format_outline_checklist(result.plot_points)
-        response_text = self._format_outline_response(discussion, outline_text, suggestions)
-        return response_text, outline_text
-
-    def _retry_outline_plot_points_json(
-        self,
-        messages,
-        error: str,
-        discussion: Optional[str],
-        suggestions,
-        max_retries: int = 2,
-    ):
-        """Retry only plot_points using strict JSON responses."""
-        from models.planning_model import StoryOutline
-        import json
-
-        retry_instruction = (
-            "The plot_points were invalid: "
-            f"{error} Return ONLY JSON with plot_points corrected. "
-            "You may omit discussion and suggestions."
-        )
-
-        for _ in range(max_retries):
-            retry_messages = messages + [HumanMessage(content=retry_instruction)]
-            response = self.llm_controller.llm.invoke(retry_messages)
-            raw_text = response.content if hasattr(response, "content") else str(response)
-            try:
-                data = json.loads(raw_text)
-                retry_result = StoryOutline(**data)
-            except Exception:
-                continue
-
-            retry_error = self._validate_plot_points(retry_result.plot_points)
-            if not retry_error:
-                merged_discussion = retry_result.discussion or discussion
-                merged_suggestions = (
-                    retry_result.suggestions if retry_result.suggestions else suggestions
-                )
-                return retry_result, merged_discussion, merged_suggestions
-        return None
-
-    def _validate_plot_points(self, plot_points) -> Optional[str]:
-        """Validate plot points and return error string if invalid."""
-        if not plot_points:
-            return "No plot points were provided."
-
-        for idx, point in enumerate(plot_points, 1):
-            if not getattr(point, "description", "").strip():
-                return f"Plot point {idx} is missing a description."
-        return None
-
-    def _retry_outline_plot_points(
-        self,
-        messages,
-        error: str,
-        discussion: Optional[str],
-        suggestions,
-        structured_llm,
-        max_retries: int = 2,
-    ):
-        """Retry only the outline portion when plot points are invalid."""
-        retry_instruction = (
-            "The outline plot points were invalid: "
-            f"{error} Please return ONLY corrected plot_points following the schema. "
-            "Discussion and suggestions may be omitted."
-        )
-
-        for _ in range(max_retries):
-            retry_messages = messages + [HumanMessage(content=retry_instruction)]
-            retry_result = structured_llm.invoke(retry_messages)
-            retry_error = self._validate_plot_points(retry_result.plot_points)
-            if not retry_error:
-                merged_discussion = retry_result.discussion or discussion
-                merged_suggestions = (
-                    retry_result.suggestions if retry_result.suggestions else suggestions
-                )
-                return retry_result, merged_discussion, merged_suggestions
-        return None
+        lines = []
+        for msg in history:
+            role = "Human" if msg["role"] == "user" else "Assistant"
+            lines.append(f"{role}: {msg['content']}")
+        return "\n".join(lines)
 
     def _format_outline_checklist(self, plot_points) -> str:
         """Format plot points as a markdown checklist."""
         lines = []
         for point in plot_points:
             checkbox = "[x]" if point.completed else "[ ]"
-            lines.append(f"- {checkbox} {point.description}")
+            lines.append(f"- {checkbox} **{point.description}**")
+            if getattr(point, "details", None):
+                lines.append(f"  {point.details}")
         return "\n".join(lines)
 
-    def _format_outline_response(
-        self,
-        discussion: Optional[str],
-        outline_text: str,
-        suggestions,
-    ) -> str:
-        """Format discussion + outline + suggestions response text."""
-        parts = []
-        if discussion:
-            parts.append("**Discussion**")
-            parts.append(discussion.strip())
-            parts.append("")
-
-        parts.append("**Outline**")
-        parts.append(outline_text)
-
-        if suggestions:
-            parts.append("")
-            parts.append("**Suggestions**")
-            for suggestion in suggestions:
-                if suggestion.strip():
-                    parts.append(f"- {suggestion.strip()}")
-
-        return "\n".join(parts)
-
-    def _append_planning_error(self, error_msg: str):
-        """Append a planning error to the LLM panel."""
+    def _emit_to_panel(self, text: str) -> None:
+        """Emit text to the planning chat panel from any thread."""
         QtCore.QMetaObject.invokeMethod(
             self.view.llm_panel,
             "append_llm_panel_text",
             QtCore.Qt.QueuedConnection,
-            QtCore.Q_ARG(str, error_msg),
+            QtCore.Q_ARG(str, text),
         )
 
-    def _stream_text_to_panel(self, text: str, chunk_size: int = 160):
-        """Stream text into the planning panel in small chunks."""
-        for i in range(0, len(text), chunk_size):
-            chunk = text[i : i + chunk_size]
-            QtCore.QMetaObject.invokeMethod(
-                self.view.llm_panel,
-                "append_llm_panel_text",
-                QtCore.Qt.QueuedConnection,
-                QtCore.Q_ARG(str, chunk),
-            )
+    def _append_planning_error(self, error_msg: str):
+        """Append an error message to the LLM panel."""
+        self._emit_to_panel(error_msg)
 
     def _append_planning_log(self, log_msg: str):
         """Append a log message from a background thread safely."""
@@ -477,15 +276,6 @@ class PlanningController(QtCore.QObject):
             QtCore.Qt.QueuedConnection,
             QtCore.Q_ARG(str, log_msg),
         )
-
-    def _extract_json_from_text(self, text: str) -> Optional[str]:
-        if not text:
-            return None
-        start = text.find("{")
-        end = text.rfind("}")
-        if start == -1 or end == -1 or end <= start:
-            return None
-        return text[start : end + 1]
 
     def _build_planning_context(
         self, user_text: str, current_outline: Optional[str], attachments_text: str
@@ -545,8 +335,10 @@ class PlanningController(QtCore.QObject):
         # Query RAG databases with calculated budget
         rag_context = self.rag_controller.query_databases(user_text, max_tokens=max_rag_tokens)
 
-        # Build system message
-        system_content = base_prompts.PLANNING_PROMPT
+        # Build dynamic context additions. The PLANNING_PROMPT system instructions
+        # live in the BAML template (models/baml_src/outline.baml); this string
+        # contains only the runtime-specific sections appended after them.
+        system_content = ""
         # Add story context
         if story_context:
             system_content += "\n\n=== EXISTING STORY CONTENT (WHAT HAS BEEN WRITTEN) ==="

@@ -21,6 +21,7 @@ from controllers.context_controller import ContextController
 from controllers.planning_controller import PlanningController
 from controllers.settings_controller import SettingsController
 from controllers.notes_controller import NotesController
+from controllers.baml_controller import BamlController
 from models.planning_model import PlanningModel
 from models.model_context_database import detect_context_window, is_vision_model
 
@@ -30,9 +31,7 @@ from pathlib import Path
 class CondenserSignals(QtCore.QObject):
     """Signals for background prompt condensing."""
 
-    condense_ready = QtCore.pyqtSignal(
-        str, str, str
-    )  # condensed supp_text, system_prompt, notes
+    condense_ready = QtCore.pyqtSignal(str, str, str)  # condensed supp_text, system_prompt, notes
     condense_error = QtCore.pyqtSignal(str)  # error_message
     thinking_update = QtCore.pyqtSignal(str)  # status message for LLM Panel
 
@@ -59,15 +58,9 @@ class MainController:
         self.view = MainView()
 
         # Create sub-controllers
-        self.prompt_controller = PromptController(
-            self.prompt_model, self.view, self.settings_model
-        )
-        self.llm_controller = LLMController(
-            self.llm_model, self.story_model, self.settings_model
-        )
-        self.notes_controller = NotesController(
-            self.settings_model, self.llm_controller, self.view
-        )
+        self.prompt_controller = PromptController(self.prompt_model, self.view, self.settings_model)
+        self.llm_controller = LLMController(self.llm_model, self.story_model, self.settings_model)
+        self.notes_controller = NotesController(self.settings_model, self.llm_controller, self.view)
         self.rag_controller = RAGController(self.rag_model, self.view)
         self.context_controller = ContextController(
             self.story_model,
@@ -94,6 +87,7 @@ class MainController:
             self.summary_model,
             self.notes_controller,
             self.view,
+            baml_controller=BamlController(self.view),
         )
 
         # Track markdown content for rendering
@@ -125,49 +119,29 @@ class MainController:
         self.view.model_refresh_clicked.connect(self._on_refresh_models)
         self.view.model_changed.connect(self._on_model_changed)
         self.view.context_limit_changed.connect(self._on_context_limit_changed)
-        self.view.toggle_summarize_prompts_requested.connect(
-            self._on_toggle_summarize_prompts
-        )
+        self.view.toggle_summarize_prompts_requested.connect(self._on_toggle_summarize_prompts)
         self.view.toggle_smart_mode_requested.connect(self._on_toggle_smart_mode)
-        self.view.rag_create_database_clicked.connect(
-            self.rag_controller.create_database
-        )
-        self.view.rag_add_files_clicked.connect(
-            self.rag_controller.add_files_to_database
-        )
+        self.view.rag_create_database_clicked.connect(self.rag_controller.create_database)
+        self.view.rag_add_files_clicked.connect(self.rag_controller.add_files_to_database)
         self.view.rag_database_toggled.connect(self.rag_controller.toggle_database)
-        self.view.rag_delete_database_clicked.connect(
-            self.rag_controller.delete_database
-        )
+        self.view.rag_delete_database_clicked.connect(self.rag_controller.delete_database)
         self.view.rag_max_chunks_changed.connect(self.rag_model.set_max_chunks)
-        self.view.rag_summary_chunk_size_changed.connect(
-            self.rag_model.set_summary_chunk_size
-        )
-        self.view.rag_score_threshold_changed.connect(
-            self.rag_model.set_score_variance_threshold
-        )
+        self.view.rag_summary_chunk_size_changed.connect(self.rag_model.set_summary_chunk_size)
+        self.view.rag_score_threshold_changed.connect(self.rag_model.set_score_variance_threshold)
         self.view.rag_filename_boost_enabled_changed.connect(
             self.rag_model.set_filename_boost_enabled
         )
-        self.view.rag_max_filename_chunks_changed.connect(
-            self.rag_model.set_max_filename_chunks
-        )
+        self.view.rag_max_filename_chunks_changed.connect(self.rag_model.set_max_filename_chunks)
         self.view.rag_levenshtein_threshold_changed.connect(
             self.rag_model.set_levenshtein_threshold
         )
-        self.view.rag_settings_requested.connect(
-            self.settings_controller.on_rag_settings_requested
-        )
+        self.view.rag_settings_requested.connect(self.settings_controller.on_rag_settings_requested)
         self.view.prompt_selections_changed.connect(self._on_prompt_selections_changed)
         self.view.summarization_prompt_requested.connect(
             self.settings_controller.on_summarization_prompt_requested
         )
-        self.view.notes_prompt_requested.connect(
-            self.settings_controller.on_notes_prompt_requested
-        )
-        self.view.ask_prompt_requested.connect(
-            self.settings_controller.on_ask_prompt_requested
-        )
+        self.view.notes_prompt_requested.connect(self.settings_controller.on_notes_prompt_requested)
+        self.view.ask_prompt_requested.connect(self.settings_controller.on_ask_prompt_requested)
         self.view.general_settings_requested.connect(
             self.settings_controller.on_general_settings_requested
         )
@@ -179,18 +153,14 @@ class MainController:
             self.settings_controller.on_inference_settings_requested
         )
         self.view.update_summary_requested.connect(self._on_update_summary_requested)
-        self.view.auto_build_story_requested.connect(
-            self._on_auto_build_story_requested
-        )
+        self.view.auto_build_story_requested.connect(self._on_auto_build_story_requested)
         self.view.override_selection_requested.connect(self._on_override_selection)
         self.view.update_selection_with_prompt_requested.connect(
             self._on_update_selection_with_prompt
         )
         self.view.update_accepted.connect(self._on_update_accepted)
         self.view.update_rejected.connect(self._on_update_rejected)
-        self.view.llm_panel.start_writing_requested.connect(
-            self._on_start_writing_from_planning
-        )
+        self.view.llm_panel.start_writing_requested.connect(self._on_start_writing_from_planning)
 
     def _connect_observers(self):
         """Connect model observers to update view."""
@@ -215,9 +185,7 @@ class MainController:
 
         # Sync summarize prompts toggle UI
         try:
-            self.view.set_summarize_prompts_enabled(
-                self.settings_model.summarize_prompts
-            )
+            self.view.set_summarize_prompts_enabled(self.settings_model.summarize_prompts)
         except Exception:
             pass
 
@@ -260,9 +228,7 @@ class MainController:
                 if ext in image_exts:
                     data = file_path.read_bytes()
                     if len(data) > max_image_bytes:
-                        image_notes.append(
-                            f"[Image: {file_path.name}] (omitted: file too large)"
-                        )
+                        image_notes.append(f"[Image: {file_path.name}] (omitted: file too large)")
                         omitted_images.append(file_path.name)
                         continue
                     b64 = base64.b64encode(data).decode("utf-8")
@@ -276,9 +242,7 @@ class MainController:
                         }
                     )
                     if include_image_base64:
-                        sections.append(
-                            f"[Image: {file_path.name}]\nMIME: {mime}\nBase64:\n{b64}"
-                        )
+                        sections.append(f"[Image: {file_path.name}]\nMIME: {mime}\nBase64:\n{b64}")
                     else:
                         image_notes.append(f"[Image attached: {file_path.name}]")
                     continue
@@ -300,9 +264,7 @@ class MainController:
                         text = file_path.read_text(encoding="utf-8", errors="replace")
                     else:
                         try:
-                            text = file_path.read_text(
-                                encoding="utf-8", errors="replace"
-                            )
+                            text = file_path.read_text(encoding="utf-8", errors="replace")
                         except Exception:
                             text = ""
 
@@ -347,9 +309,7 @@ class MainController:
 
                 # Condense supplemental prompts if needed
                 if ctx["supp_tokens"] > ctx["max_supp_tokens"] and condensed_supp:
-                    signals.thinking_update.emit(
-                        "📎 Condensing supplemental prompts...\n"
-                    )
+                    signals.thinking_update.emit("📎 Condensing supplemental prompts...\n")
                     condensed_supp, _ = self.llm_controller.summarize_supplemental(
                         condensed_supp, ctx["max_supp_tokens"]
                     )
@@ -371,9 +331,7 @@ class MainController:
                     )
                     signals.thinking_update.emit("  ✓ Notes condensed\n\n")
 
-                signals.condense_ready.emit(
-                    condensed_supp, condensed_system, condensed_notes
-                )
+                signals.condense_ready.emit(condensed_supp, condensed_system, condensed_notes)
             except Exception as e:
                 self.view.append_logs(f"Error condensing prompts: {e}")
                 signals.condense_error.emit(str(e))
@@ -552,10 +510,8 @@ class MainController:
 
         model_name = self.llm_model.current_model
         can_see_images = is_vision_model(model_name)
-        attachments_text, image_payloads, omitted_images = (
-            self._build_attachments_payload(
-                attachments, include_image_base64=not can_see_images
-            )
+        attachments_text, image_payloads, omitted_images = self._build_attachments_payload(
+            attachments, include_image_base64=not can_see_images
         )
 
         if image_payloads and not can_see_images:
@@ -803,9 +759,7 @@ class MainController:
                     "⚠️ Prompt summarization disabled; skipping condensing of oversized prompts.\n"
                 )
 
-        fixed_costs = (
-            supp_tokens + notes_tokens + user_tokens + system_tokens + safety_buffer
-        )
+        fixed_costs = supp_tokens + notes_tokens + user_tokens + system_tokens + safety_buffer
 
         # Calculate available space for story context
         available_for_story = context_limit - fixed_costs
@@ -835,9 +789,7 @@ class MainController:
                 f"Story tokens: {story_tokens} | Context limit: {context_limit}\n"
             )
             self.view.append_logs(f"Max raw content: {max_raw_tokens} tokens\n")
-            self.view.append_logs(
-                f"Max rolling summary: {max_rolling_summary_tokens} tokens\n"
-            )
+            self.view.append_logs(f"Max rolling summary: {max_rolling_summary_tokens} tokens\n")
             self.view.append_logs(f"{'=' * 60}\n\n")
 
             self.view.set_waiting(True)
@@ -897,18 +849,12 @@ class MainController:
         # Calculate dynamic RAG token budget (30% of available context after fixed costs)
         context_limit = self.settings_model.context_limit
         user_tokens = self.story_model.estimate_token_count(user_input)
-        supp_tokens = (
-            self.story_model.estimate_token_count(supp_text) if supp_text else 0
-        )
+        supp_tokens = self.story_model.estimate_token_count(supp_text) if supp_text else 0
         notes_tokens = self.story_model.estimate_token_count(notes) if notes else 0
-        system_tokens = (
-            self.story_model.estimate_token_count(system_prompt) if system_prompt else 0
-        )
+        system_tokens = self.story_model.estimate_token_count(system_prompt) if system_prompt else 0
         output_reserve = 2000  # Reserve tokens for model output
 
-        fixed_costs = (
-            user_tokens + supp_tokens + notes_tokens + system_tokens + output_reserve
-        )
+        fixed_costs = user_tokens + supp_tokens + notes_tokens + system_tokens + output_reserve
         available_for_rag_and_story = context_limit - fixed_costs
 
         # Allocate 30% for RAG, rest for story
@@ -916,16 +862,10 @@ class MainController:
         max_rag_tokens = max(500, min(max_rag_tokens, 4000))  # Clamp between 500-4000
 
         # Query RAG databases with dynamic token budget
-        rag_context = self.rag_controller.query_databases(
-            user_input, max_tokens=max_rag_tokens
-        )
+        rag_context = self.rag_controller.query_databases(user_input, max_tokens=max_rag_tokens)
         if rag_context:
             rag_tokens = self.story_model.estimate_token_count(rag_context)
-            final_query = (
-                final_query
-                + "\n\nRELEVANT CONTEXT FROM KNOWLEDGE BASE:\n"
-                + rag_context
-            )
+            final_query = final_query + "\n\nRELEVANT CONTEXT FROM KNOWLEDGE BASE:\n" + rag_context
             self.view.append_logs(
                 f"\n🔍 Including RAG context ({rag_tokens:,}/{max_rag_tokens:,} tokens)\n"
             )
@@ -948,9 +888,7 @@ class MainController:
 
         # Show system prompt info
         if system_prompt:
-            self.view.append_logs(
-                f"🔧 Using system prompt ({len(system_prompt)} chars)\n"
-            )
+            self.view.append_logs(f"🔧 Using system prompt ({len(system_prompt)} chars)\n")
 
         # Start waiting animation
         self.view.set_waiting(True)
@@ -1053,11 +991,7 @@ class MainController:
 
                 self.view.append_logs(f"  ✓ Reduced to {rag_tokens} tokens\n")
 
-            final_query = (
-                final_query
-                + "\n\nRELEVANT CONTEXT FROM KNOWLEDGE BASE:\n"
-                + rag_context
-            )
+            final_query = final_query + "\n\nRELEVANT CONTEXT FROM KNOWLEDGE BASE:\n" + rag_context
             self.view.append_logs(f"\n🔍 Including RAG context ({rag_tokens} tokens)\n")
 
         # Always append supplemental text
@@ -1078,9 +1012,7 @@ class MainController:
 
         # Show system prompt info
         if system_prompt:
-            self.view.append_logs(
-                f"🔧 Using system prompt ({len(system_prompt)} chars)\n"
-            )
+            self.view.append_logs(f"🔧 Using system prompt ({len(system_prompt)} chars)\n")
 
         # Start waiting animation
         self.view.set_waiting(True)
@@ -1125,13 +1057,9 @@ class MainController:
         user_tokens = self.story_model.estimate_token_count(ctx["user_input"])
         system_tokens = self.story_model.estimate_token_count(ctx["system_prompt"])
         fixed_costs = supp_tokens + notes_tokens + user_tokens + system_tokens + 500
-        max_raw_tokens = min(
-            self.rag_model.summary_chunk_size, context_limit - fixed_costs
-        )
+        max_raw_tokens = min(self.rag_model.summary_chunk_size, context_limit - fixed_costs)
 
-        story_for_llm, _ = self.story_model.extract_recent_content(
-            current_story, max_raw_tokens
-        )
+        story_for_llm, _ = self.story_model.extract_recent_content(current_story, max_raw_tokens)
 
         # Continue with the send process
         self._on_summarization_complete(story_for_llm, max_raw_tokens)
@@ -1194,9 +1122,7 @@ class MainController:
             self.settings_model.last_model = model_name
 
         # Apply profile settings for the newly selected model (if any)
-        profile = self.settings_model.get_model_profile(
-            model_name, self.settings_model.base_url
-        )
+        profile = self.settings_model.get_model_profile(model_name, self.settings_model.base_url)
         if profile:
             self._apply_model_profile(profile)
         else:
@@ -1211,9 +1137,7 @@ class MainController:
                 # Save the detected value to profile for future use
                 self._save_current_model_profile()
             except Exception as e:
-                self.view.append_logs(
-                    f"Warning: Could not auto-detect context window: {e}"
-                )
+                self.view.append_logs(f"Warning: Could not auto-detect context window: {e}")
                 # Fall back to existing behavior (keep current value)
 
         # Update the LLM model
@@ -1343,9 +1267,7 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
             set_stop_enabled_callback=self.view.set_stop_enabled,
         )
 
-    def _on_update_selection_with_prompt(
-        self, selected_text, start_pos, end_pos, prompt
-    ):
+    def _on_update_selection_with_prompt(self, selected_text, start_pos, end_pos, prompt):
         """Handle update selection request with prompt from dialog.
 
         Args:
@@ -1498,9 +1420,7 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
 
         self.view.append_logs(f"Story size: {story_tokens} tokens\n")
         self.view.append_logs(f"Target raw content: {max_raw_tokens} tokens\n")
-        self.view.append_logs(
-            f"Target rolling summary: {max_rolling_summary_tokens} tokens\n\n"
-        )
+        self.view.append_logs(f"Target rolling summary: {max_rolling_summary_tokens} tokens\n\n")
 
         # Start processing
         self.view.set_waiting(True)
@@ -1604,9 +1524,7 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
             return
 
         # Continue with auto-build mode
-        self._continue_auto_build(
-            initial_prompt, notes, supp_text, system_prompt, attachments_text
-        )
+        self._continue_auto_build(initial_prompt, notes, supp_text, system_prompt, attachments_text)
 
     def _continue_auto_build(
         self, initial_prompt, notes, supp_text, system_prompt, attachments_text
@@ -1689,9 +1607,7 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
         chunk_num = state["chunk_count"]
 
         self.view.append_logs(f"\n{'─' * 60}\n")
-        self.view.append_logs(
-            f"📝 GENERATING CHUNK {chunk_num}/{state['max_chunks']}\n"
-        )
+        self.view.append_logs(f"📝 GENERATING CHUNK {chunk_num}/{state['max_chunks']}\n")
         self.view.append_logs(f"{'─' * 60}\n\n")
 
         # Get current story content
@@ -1718,10 +1634,8 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
             and self.settings_model.summarize_prompts
         ):
             self.view.append_logs("🔄 Condensing supplemental prompts...\n")
-            state["supp_text"], supp_tokens = (
-                self.llm_controller.summarize_supplemental(
-                    state["supp_text"], max_supp_tokens
-                )
+            state["supp_text"], supp_tokens = self.llm_controller.summarize_supplemental(
+                state["supp_text"], max_supp_tokens
             )
             self.view.append_logs(f"  ✓ Reduced to {supp_tokens} tokens\n")
 
@@ -1731,10 +1645,8 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
             and self.settings_model.summarize_prompts
         ):
             self.view.append_logs("🔄 Condensing system prompt...\n")
-            state["system_prompt"], system_tokens = (
-                self.llm_controller.summarize_system_prompt(
-                    state["system_prompt"], max_system_tokens
-                )
+            state["system_prompt"], system_tokens = self.llm_controller.summarize_system_prompt(
+                state["system_prompt"], max_system_tokens
             )
             self.view.append_logs(f"  ✓ Reduced to {system_tokens} tokens\n")
 
@@ -1753,12 +1665,8 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
         rag_query = state["initial_prompt"]
         if current_story:
             # Use last 500 chars of story for RAG context
-            recent_story = (
-                current_story[-500:] if len(current_story) > 500 else current_story
-            )
-            rag_query = (
-                f"{state['initial_prompt']}\n\nRecent story content:\n{recent_story}"
-            )
+            recent_story = current_story[-500:] if len(current_story) > 500 else current_story
+            rag_query = f"{state['initial_prompt']}\n\nRecent story content:\n{recent_story}"
 
         # Calculate dynamic RAG budget for auto-build (25% allocation)
         context_limit = self.settings_model.context_limit
@@ -1766,17 +1674,11 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
         available_for_rag_and_story = (
             context_limit - supp_tokens - notes_tokens - system_tokens - output_reserve
         )
-        max_rag_tokens = int(
-            available_for_rag_and_story * 0.25
-        )  # 25% for RAG in auto-build
+        max_rag_tokens = int(available_for_rag_and_story * 0.25)  # 25% for RAG in auto-build
         max_rag_tokens = max(500, min(max_rag_tokens, 3000))
 
-        self.view.append_logs(
-            f"🔍 Querying RAG databases (budget: {max_rag_tokens:,} tokens)...\n"
-        )
-        rag_context = self.rag_controller.query_databases(
-            rag_query, max_tokens=max_rag_tokens
-        )
+        self.view.append_logs(f"🔍 Querying RAG databases (budget: {max_rag_tokens:,} tokens)...\n")
+        rag_context = self.rag_controller.query_databases(rag_query, max_tokens=max_rag_tokens)
 
         if rag_context:
             rag_tokens = self.story_model.estimate_token_count(rag_context)
@@ -1790,15 +1692,11 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
         story_tokens = self.story_model.estimate_token_count(current_story)
         fixed_costs = supp_tokens + notes_tokens + system_tokens + safety_buffer
         available_for_story = context_limit - fixed_costs
-        max_raw_tokens = min(
-            self.rag_model.summary_chunk_size, int(available_for_story * 0.6)
-        )
+        max_raw_tokens = min(self.rag_model.summary_chunk_size, int(available_for_story * 0.6))
 
         if story_tokens > max_raw_tokens and current_story:
             self.view.append_logs(f"\n📊 Story getting large ({story_tokens} tokens)\n")
-            self.view.append_logs(
-                "🔄 Running summarization to compress older content...\n\n"
-            )
+            self.view.append_logs("🔄 Running summarization to compress older content...\n\n")
 
             # Store context and run summarization, then continue in callback
             self._auto_build_pending_continue = True
@@ -1853,9 +1751,7 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
         final_query = "".join(query_parts)
 
         # Generate chunk with paragraph limit
-        self.view.append_logs(
-            f"✍️ Generating {state['paragraphs_per_chunk']} paragraphs...\n\n"
-        )
+        self.view.append_logs(f"✍️ Generating {state['paragraphs_per_chunk']} paragraphs...\n\n")
 
         # Start waiting animation before LLM call
         self.view.set_waiting(True)
@@ -1904,9 +1800,7 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
         if self.llm_model.stop_generation:
             state = self._auto_build_state
             self.view.append_logs(f"\n\n{'=' * 60}\n")
-            self.view.append_logs(
-                "⏹️ AUTO BUILD STOPPED BY USER (during summarization)\n"
-            )
+            self.view.append_logs("⏹️ AUTO BUILD STOPPED BY USER (during summarization)\n")
             self.view.append_logs(f"Generated {state['chunk_count']} chunks.\n")
             self.view.append_logs(f"{'=' * 60}\n")
             self.view.set_stop_enabled(False)
@@ -1936,9 +1830,7 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
             if not self.settings_model.smart_mode:
                 self.settings_model.smart_mode = True
                 self.view.set_smart_mode(True)
-                self.view.append_logs(
-                    "✓ Story Mode enabled (continuous writing with RAG)"
-                )
+                self.view.append_logs("✓ Story Mode enabled (continuous writing with RAG)")
             # Disable planning mode if it was active
             self.view.llm_panel.set_planning_mode(False)
         # If Write mode, disable smart_mode and planning mode
@@ -1974,9 +1866,7 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
 
         if saved_conversation:
             # Extract only user messages for arrow key recall
-            user_messages = [
-                msg["content"] for msg in saved_conversation if msg["role"] == "user"
-            ]
+            user_messages = [msg["content"] for msg in saved_conversation if msg["role"] == "user"]
             self.view.llm_panel.user_message_history = user_messages
 
         # Always show welcome message (fresh start, don't restore old conversations)
@@ -1995,9 +1885,7 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
         Args:
             outline: The outline text to use for generation
         """
-        self.view.llm_panel.append_llm_panel_text(
-            "\n\n🚀 **Starting Story Generation...**\n\n"
-        )
+        self.view.llm_panel.append_llm_panel_text("\n\n🚀 **Starting Story Generation...**\n\n")
 
         # Store outline in story model
         self.story_model.planning_outline = outline
@@ -2021,9 +1909,7 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
         self.view.llm_panel.set_mode("Write")
 
         # Start outline-driven generation
-        self.planning_controller.start_outline_build(
-            outline, notes, supp_text, system_prompt
-        )
+        self.planning_controller.start_outline_build(outline, notes, supp_text, system_prompt)
 
     def show(self):
         """Show the main view."""

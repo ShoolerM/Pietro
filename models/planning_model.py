@@ -12,13 +12,18 @@ class OutlinePlotPoint(BaseModel):
     """A single plot point in a story outline.
 
     Attributes:
-        description: Specific narrative event or action
+        description: Short title for the narrative event
+        details: Longer narrative description of what happens in this section
         completed: Whether this plot point has been written in the story
     """
 
     description: str = Field(
         ...,
-        description="A specific narrative event or action that happens in the story",
+        description="A short title for the narrative event or section",
+    )
+    details: Optional[str] = Field(
+        None,
+        description="A few sentences describing what specifically happens in this section",
     )
     completed: bool = Field(
         default=False,
@@ -46,6 +51,26 @@ class StoryOutline(BaseModel):
     suggestions: Optional[List[str]] = Field(
         default_factory=list,
         description="Optional list of suggestions to improve or extend the outline",
+    )
+
+
+class PlanningResponse(BaseModel):
+    """Returned by the BAML Plan() function.
+
+    Attributes:
+        action: 'chat' for a conversational reply, 'outline' for outline generation.
+        message: Populated when action='chat'.
+        plot_points: Populated when action='outline'.
+    """
+
+    action: str = Field(..., description="'chat' or 'outline'")
+    message: Optional[str] = Field(
+        None,
+        description="Conversational reply text (action='chat')",
+    )
+    plot_points: Optional[List[OutlinePlotPoint]] = Field(
+        None,
+        description="Ordered list of plot points (action='outline')",
     )
 
 
