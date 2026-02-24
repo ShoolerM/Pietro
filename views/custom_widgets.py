@@ -204,15 +204,20 @@ class OutlineSectionRow(QtWidgets.QWidget):
 
         layout.addLayout(self._text_layout, stretch=1)
 
-        # Edit button – always visible, lets the user modify section title/details
-        self._edit_button = QtWidgets.QPushButton("✏")
+        # Edit button – always visible, lets the user modify section title/details.
+        # Use \u270f (pencil) via stylesheet font-family so CSS fallback chains work
+        # properly (QFont.setFamily only accepts a single name, not a comma list).
+        # Do NOT use setFlat(True) — a flat button with a missing glyph is completely
+        # invisible against the dark background.
+        self._edit_button = QtWidgets.QPushButton("\u270f")
         self._edit_button.setFixedSize(24, 24)
-        self._edit_button.setFlat(True)
         self._edit_button.setToolTip("Edit this section")
         self._edit_button.setCursor(QtCore.Qt.PointingHandCursor)
         self._edit_button.setStyleSheet(
-            "QPushButton { color: #777777; border: 1px solid #444; border-radius: 3px; }"
-            "QPushButton:hover { color: #cccccc; border-color: #888; }"
+            "QPushButton { color: #aaaaaa; background: #2a2a2a; border: 1px solid #444;"
+            " border-radius: 3px;"
+            " font-family: 'Segoe UI Symbol', 'Symbola', sans-serif; }"
+            "QPushButton:hover { color: #ffffff; background: #3a3a3a; border-color: #888; }"
         )
         self._edit_button.clicked.connect(self._on_edit_clicked)
         layout.addWidget(self._edit_button)
@@ -327,6 +332,56 @@ class OutlineSectionRow(QtWidgets.QWidget):
         self._redo_button.setVisible(status in ("done", "active"))
         self._apply_colors()
 
+    def hasHeightForWidth(self) -> bool:  # noqa: N802
+        """Tell Qt that this widget's preferred height depends on its width."""
+        return True
+
+    def heightForWidth(self, width: int) -> int:  # noqa: N802
+        """Calculate the correct wrapped height for the given widget width.
+
+        QLabel.sizeHint() always returns the one-line height even for word-wrapped
+        labels.  Using heightForWidth() on each label gives the true wrapped height.
+
+        Args:
+            width: The widget width to measure against.
+
+        Returns:
+            The minimum height needed to display all content at this width.
+        """
+        h_layout = self.layout()
+        margins = h_layout.contentsMargins()
+        spacing: int = h_layout.spacing()
+
+        # Sum up fixed-width items that eat into the text column:
+        #   left-margin + status-button + spacing + spacing + edit-button + right-margin
+        fixed_w: int = margins.left() + margins.right()
+        fixed_w += 28 + spacing  # status button + gap
+        fixed_w += spacing + 24  # gap + edit button
+        if self._redo_button.isVisible():
+            fixed_w += spacing + 24  # gap + redo button
+
+        text_w: int = max(1, width - fixed_w)
+
+        # Title height (wrapped)
+        title_h: int = self._title_label.heightForWidth(text_w)
+        if title_h < 0:
+            title_h = self._title_label.sizeHint().height()
+
+        # Details height (wrapped), only when visible
+        details_h: int = 0
+        if self._details_label.isVisible():
+            dh: int = self._details_label.heightForWidth(text_w)
+            if dh < 0:
+                dh = self._details_label.sizeHint().height()
+            # Add the VBoxLayout spacing between title and details
+            details_h = dh + self._text_layout.spacing()
+
+        text_h: int = title_h + details_h
+
+        # Ensure the row is tall enough for the fixed-size buttons (24 px each)
+        min_button_h: int = 24
+        return max(text_h, min_button_h) + margins.top() + margins.bottom()
+
 
 class OutlineTrackerWidget(QtWidgets.QWidget):
     """Displays the story outline as an interactive checklist during writing.
@@ -360,8 +415,13 @@ class OutlineTrackerWidget(QtWidgets.QWidget):
         self._list = QtWidgets.QListWidget()
         self._list.setSelectionMode(QtWidgets.QAbstractItemView.NoSelection)
         self._list.setFocusPolicy(QtCore.Qt.NoFocus)
-        self._list.setMaximumHeight(210)
         self._list.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
+        # Re-lay-out items whenever the viewport is resized so word-wrap stays correct
+        self._list.setResizeMode(QtWidgets.QListView.Adjust)
+        # Slow mouse-wheel scrolling to one line per tick for fine-grained navigation
+        self._list.setVerticalScrollMode(QtWidgets.QAbstractItemView.ScrollPerPixel)
+        self._list.verticalScrollBar().setSingleStep(15)
+        self._list.installEventFilter(self)
         self._list.setStyleSheet(
             "QListWidget {"
             "  background: #1e1e1e;"
@@ -374,6 +434,46 @@ class OutlineTrackerWidget(QtWidgets.QWidget):
             "}"
         )
         layout.addWidget(self._list)
+
+    def eventFilter(self, obj: QtCore.QObject, event: QtCore.QEvent) -> bool:
+        """Intercept wheel events on the list to scroll one line at a time."""
+        if obj is self._list and event.type() == QtCore.QEvent.Wheel:
+            # Scroll by a fixed pixel amount per wheel notch instead of a full page
+            delta: int = event.angleDelta().y()
+            scroll_amount: int = -40 if delta > 0 else 40
+            self._list.verticalScrollBar().setValue(
+                self._list.verticalScrollBar().value() + scroll_amount
+            )
+            return True
+        return super().eventFilter(obj, event)
+
+    def resizeEvent(self, event: QtGui.QResizeEvent) -> None:
+        """Recalculate item size hints on resize so word-wrapped labels fit."""
+        super().resizeEvent(event)
+        self._update_item_size_hints()
+
+    def _update_item_size_hints(self) -> None:
+        """Constrain each row to the current viewport width and update its size hint.
+
+        Uses heightForWidth() on each row rather than sizeHint() because
+        QLabel.sizeHint() always returns the single-line (unwrapped) height,
+        causing rows with long text to be clipped vertically.
+        """
+        available_width: int = self._list.viewport().width()
+        if available_width <= 0:
+            return
+        for i, row in enumerate(self._row_widgets):
+            if i >= self._list.count():
+                break
+            # Pin width so the row's layout knows how wide it is for button visibility
+            row.setFixedWidth(available_width)
+            # Compute the correct wrapped height directly
+            h: int = row.heightForWidth(available_width)
+            hint = QtCore.QSize(available_width, h)
+            # Release the fixed-width constraint so normal layout can take over
+            row.setMinimumWidth(0)
+            row.setMaximumWidth(16_777_215)  # Qt's QWIDGETSIZE_MAX
+            self._list.item(i).setSizeHint(hint)
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
@@ -453,6 +553,9 @@ class OutlineTrackerWidget(QtWidgets.QWidget):
             item.setSizeHint(row.sizeHint())
             self._list.setItemWidget(item, row)
             self._row_widgets.append(row)
+        # Defer the size-hint recalculation to the next event loop tick so the
+        # viewport has a real width by the time we measure the wrapped row heights.
+        QtCore.QTimer.singleShot(0, self._update_item_size_hints)
 
     def get_sections(self) -> list:
         """Return a copy of the current sections list.
@@ -477,11 +580,8 @@ class OutlineTrackerWidget(QtWidgets.QWidget):
             self._sections[index]["title"] = title
             self._sections[index]["details"] = details
 
-        # Refresh the list item's size hint after the row content changed
-        if index < self._list.count():
-            item = self._list.item(index)
-            row_widget = self._row_widgets[index]
-            item.setSizeHint(row_widget.sizeHint())
+        # Refresh all item size hints (wrapping may change the height of edited row)
+        self._update_item_size_hints()
 
         # Bubble the edit event up to the LLMPanel
         self.section_edited.emit(index, title, details)
