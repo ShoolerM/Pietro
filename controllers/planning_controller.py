@@ -13,6 +13,7 @@ from typing import Optional, Dict, Any, Callable, List
 from PyQt5 import QtCore
 
 from models.planning_model import PlanningModel
+from views.llm_panel import LLMPanel
 
 
 class PlanningController(QtCore.QObject):
@@ -75,32 +76,36 @@ class PlanningController(QtCore.QObject):
             conversation_history: Full conversation history
             current_outline: Current outline state
         """
-        # Build context for planning
-        context = self._build_planning_context(user_input, current_outline, attachments_text)
-
-        # Set waiting state
+        # Show spinner immediately so the UI is responsive while context is built
         self.view.set_waiting(True)
 
-        # Start background thread for LLM streaming to panel
+        # Start background thread — context building and LLM call both happen off the main thread
         thread = threading.Thread(
             target=self._planning_thread_for_panel,
-            args=(user_input, context, conversation_history),
+            args=(user_input, current_outline, attachments_text, conversation_history),
             daemon=True,
         )
         thread.start()
 
-    def _planning_thread_for_panel(self, user_input, context, conversation_history):
+    def _planning_thread_for_panel(
+        self, user_input, current_outline, attachments_text, conversation_history
+    ):
         """Background thread for all planning LLM interaction.
 
-        Delegates to _run_planning_request which makes a single BAML Plan() call.
-        The LLM decides whether to chat or generate an outline.
+        Builds context then delegates to _run_planning_request which makes a
+        single BAML Plan() call. The LLM decides whether to chat or generate
+        an outline. Context building is done here (off the main thread) so the
+        UI stays responsive and the progress bar spins from the start.
         """
         try:
+            context = self._build_planning_context(user_input, current_outline, attachments_text)
             history_str = self._format_conversation_history(conversation_history[:-1])
             base_url = self.settings_model.base_url
             model = self.settings_model.last_model
             api_key = self.settings_model.api_key
-            self._run_planning_request(user_input, context, history_str, base_url, model, api_key)
+            self._run_planning_request(
+                user_input, context, history_str, base_url, model, api_key, conversation_history
+            )
         except Exception as e:
             error_msg = f"\n\n❌ Error: {str(e)}\n\n"
             self._append_planning_error(error_msg)
@@ -122,6 +127,7 @@ class PlanningController(QtCore.QObject):
         base_url: str,
         model: str,
         api_key: str,
+        conversation_history: list,
     ) -> None:
         """Execute a BAML Plan() call. The LLM decides chat vs outline.
 
@@ -195,15 +201,21 @@ class PlanningController(QtCore.QObject):
 
         if action == "chat":
             message = getattr(result, "message", None) or ""
+            # Pre-compute the full conversation HTML off the main thread so the
+            # main-thread slot only needs to call setHtml() — no markdown parsing.
+            rag_items = self.rag_controller.last_rag_display_items
+            full_conv = list(conversation_history) + [{"role": "assistant", "content": message}]
+            html = LLMPanel.build_planning_html(full_conv, rag_items, rag_collapsed=True)
             QtCore.QMetaObject.invokeMethod(
                 self.view.llm_panel,
-                "add_planning_message",
+                "apply_planning_message_html",
                 QtCore.Qt.QueuedConnection,
                 QtCore.Q_ARG(str, "assistant"),
                 QtCore.Q_ARG(str, message),
+                QtCore.Q_ARG(str, html),
             )
             self.settings_model.save_planning_conversation(
-                self.view.llm_panel.get_planning_conversation(),
+                full_conv,
                 self.view.llm_panel.get_current_outline(),
             )
 
@@ -215,12 +227,19 @@ class PlanningController(QtCore.QObject):
                 )
                 return
             outline_text = self._format_outline_checklist(plot_points)
+            # Pre-compute the full conversation HTML off the main thread.
+            rag_items = self.rag_controller.last_rag_display_items
+            full_conv = list(conversation_history) + [
+                {"role": "assistant", "content": outline_text}
+            ]
+            html = LLMPanel.build_planning_html(full_conv, rag_items, rag_collapsed=True)
             QtCore.QMetaObject.invokeMethod(
                 self.view.llm_panel,
-                "add_planning_message",
+                "apply_planning_message_html",
                 QtCore.Qt.QueuedConnection,
                 QtCore.Q_ARG(str, "assistant"),
                 QtCore.Q_ARG(str, outline_text),
+                QtCore.Q_ARG(str, html),
             )
             QtCore.QMetaObject.invokeMethod(
                 self.view.llm_panel,
@@ -244,7 +263,7 @@ class PlanningController(QtCore.QObject):
                 QtCore.Q_ARG(str, json.dumps(sections_data)),
             )
             self.settings_model.save_planning_conversation(
-                self.view.llm_panel.get_planning_conversation(),
+                full_conv,
                 outline_text,
             )
         else:
