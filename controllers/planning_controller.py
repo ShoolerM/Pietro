@@ -708,7 +708,14 @@ class PlanningController(QtCore.QObject):
                 self.view.append_logs("  • No additional context found\n")
 
         # Build query
-        query = self._build_chunk_query(state, story_for_llm, current_task, rag_context)
+        # Determine whether this is the final chunk for the current section so the
+        # prompt can explicitly instruct the LLM to close in a way that sets up the
+        # next section naturally.
+        max_chunks: int = self.view.llm_panel.get_chunks_per_section()
+        is_last_chunk: bool = state["task_chunk_count"] >= max_chunks
+        query = self._build_chunk_query(
+            state, story_for_llm, current_task, rag_context, is_last_chunk
+        )
 
         # Generate
         self.view.append_logs(f"✍️ Generating {state['paragraphs_per_chunk']} paragraphs...\n\n")
@@ -731,6 +738,7 @@ class PlanningController(QtCore.QObject):
         story_for_llm: str,
         current_task: str,
         rag_context: Optional[str],
+        is_last_chunk: bool = False,
     ) -> str:
         """Build query for chunk generation.
 
@@ -739,6 +747,8 @@ class PlanningController(QtCore.QObject):
             story_for_llm: Story content
             current_task: Current plot point
             rag_context: RAG context if available
+            is_last_chunk: True when this is the final chunk allowed for this section,
+                           so the LLM should end in a way that leads into the next section.
 
         Returns:
             Query string for LLM
@@ -762,7 +772,8 @@ class PlanningController(QtCore.QObject):
         # Current task
         parts.append(f"CURRENT PLOT POINT TO ADDRESS NOW:\n{current_task}\n\n")
 
-        # Upcoming tasks
+        # Upcoming tasks — always show the immediate next section so the LLM knows
+        # where the story is heading, and can end this section appropriately.
         remaining = state["original_tasks"][state["current_task_index"] + 1 :]
         if remaining:
             parts.append("UPCOMING PLOT POINTS (do NOT write these yet):\n")
@@ -780,8 +791,44 @@ class PlanningController(QtCore.QObject):
         if state["supp_text"]:
             parts.append(f"ADDITIONAL INSTRUCTIONS:\n{state['supp_text']}\n\n")
 
-        # Instructions
-        if is_first:
+        # Build the closing instruction, varying based on position in the section
+        next_task: Optional[str] = remaining[0] if remaining else None
+
+        if is_last_chunk and next_task:
+            # Last chunk of a section: close it in a way that bridges to the next section
+            bridge_hint = (
+                f"This is the FINAL chunk for the current plot point. "
+                f"Write EXACTLY {state['paragraphs_per_chunk']} paragraphs covering the current plot point. "
+                f'End this section at a natural stopping point that flows smoothly into the NEXT plot point: "{next_task}". '
+                f"Do NOT begin writing the next plot point — just ensure the final sentence or paragraph "
+                f"positions the story so that plot point can begin naturally."
+            )
+            if is_first:
+                parts.append(
+                    f"START the story by addressing the first plot point above. {bridge_hint}"
+                )
+            else:
+                parts.append(
+                    f"CONTINUE the story by addressing the current plot point above. "
+                    f"Focus ONLY on the current plot point while maintaining narrative flow from what came before. "
+                    f"{bridge_hint}"
+                )
+        elif is_last_chunk:
+            # Last chunk and no following section — this is the story's ending
+            if is_first:
+                parts.append(
+                    f"START the story by addressing the first plot point above. "
+                    f"Write EXACTLY {state['paragraphs_per_chunk']} paragraphs. "
+                    f"This is the FINAL section of the story — bring it to a satisfying conclusion."
+                )
+            else:
+                parts.append(
+                    f"CONTINUE the story by addressing the current plot point above. "
+                    f"Write EXACTLY {state['paragraphs_per_chunk']} paragraphs. "
+                    f"This is the FINAL section of the story — bring it to a satisfying conclusion. "
+                    f"Focus ONLY on the current plot point while maintaining narrative flow from what came before."
+                )
+        elif is_first:
             parts.append(
                 f"START the story by addressing the first plot point above. "
                 f"Write EXACTLY {state['paragraphs_per_chunk']} paragraphs. "
