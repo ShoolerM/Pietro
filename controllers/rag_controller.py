@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from dataclasses import dataclass
 import numpy as np
-from PyQt5 import QtWidgets
+from PyQt5 import QtCore, QtWidgets
 from sklearn.metrics.pairwise import cosine_similarity
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -149,8 +149,46 @@ class RAGController:
         # Cache for loaded FAISS indexes {db_name: vectorstore}
         self._vectorstores: dict[str, FAISS] = {}
 
+        # Last RAG display items produced by query_databases — set before the
+        # queued _safe_set_rag_items call so background callers can read them
+        # synchronously immediately after query_databases returns.
+        self.last_rag_display_items: list = []
+
         # Register model observers
         self.rag_model.add_observer(self._on_rag_model_changed)
+
+    # ------------------------------------------------------------------
+    # Thread-safe view helpers
+    # ------------------------------------------------------------------
+
+    def _safe_log(self, msg: str) -> None:
+        """Append a log message to the view from any thread.
+
+        Uses QMetaObject.invokeMethod with a QueuedConnection so it is safe
+        to call from background threads.  append_logs is decorated with
+        @pyqtSlot(str) on MainView, which registers it with Qt's meta-object
+        system and enables the queued cross-thread delivery.
+        """
+        QtCore.QMetaObject.invokeMethod(
+            self.view,
+            "append_logs",
+            QtCore.Qt.QueuedConnection,
+            QtCore.Q_ARG(str, msg),
+        )
+
+    def _safe_set_rag_items(self, items: list) -> None:
+        """Update RAG display items from any thread.
+
+        Uses QMetaObject.invokeMethod with a QueuedConnection so it is safe
+        to call from background threads.  set_rag_items is decorated with
+        @pyqtSlot(list) on MainView.
+        """
+        QtCore.QMetaObject.invokeMethod(
+            self.view,
+            "set_rag_items",
+            QtCore.Qt.QueuedConnection,
+            QtCore.Q_ARG(list, items),
+        )
 
     def _init_components(self, quiet: bool = False) -> None:
         """Lazy-initialize FAISS components.
@@ -163,15 +201,15 @@ class RAGController:
 
         try:
             if not quiet:
-                self.view.append_logs("Initializing RAG components...")
+                self._safe_log("Initializing RAG components...")
 
             # Get database path from model
             rag_dir = Path(self.rag_model.rag_dir)
             rag_dir.mkdir(exist_ok=True)
 
             if not quiet:
-                self.view.append_logs(f"  RAG storage: {rag_dir}")
-                self.view.append_logs("  Loading embedding model...")
+                self._safe_log(f"  RAG storage: {rag_dir}")
+                self._safe_log("  Loading embedding model...")
 
             # Initialize embeddings (using a lightweight model)
             self._embeddings = HuggingFaceEmbeddings(
@@ -179,7 +217,7 @@ class RAGController:
             )
 
             if not quiet:
-                self.view.append_logs("  ✓ Embedding model loaded")
+                self._safe_log("  ✓ Embedding model loaded")
 
             # Initialize text splitter
             self._text_splitter = RecursiveCharacterTextSplitter(
@@ -187,11 +225,11 @@ class RAGController:
             )
 
             if not quiet:
-                self.view.append_logs("✓ RAG components initialized\n")
+                self._safe_log("✓ RAG components initialized\n")
 
         except Exception as e:
             if not quiet:
-                self.view.append_logs(f"❌ Error initializing RAG components: {e}")
+                self._safe_log(f"❌ Error initializing RAG components: {e}")
             traceback.print_exc()
             self.view.show_warning(
                 "RAG Error",
@@ -247,7 +285,7 @@ class RAGController:
             return None
 
         except Exception as e:
-            self.view.append_logs(f"Error loading vectorstore '{db_name}': {e}")
+            self._safe_log(f"Error loading vectorstore '{db_name}': {e}")
             traceback.print_exc()
             return None
 
@@ -303,14 +341,14 @@ class RAGController:
                 return None
 
         except Exception as e:
-            self.view.append_logs(f"⚠️ Error loading document '{file_path}': {e}")
+            self._safe_log(f"⚠️ Error loading document '{file_path}': {e}")
             return None
 
     def _on_rag_model_changed(self, event_type: RAGEvent, data: Any) -> None:
         """Handle Smart Model changes."""
         try:
             if event_type != RAGEvent.SELECTION_CHANGED:
-                self.view.append_logs(f"\n🔔 Smart Model event: {event_type.value}")
+                self._safe_log(f"\n🔔 Smart Model event: {event_type.value}")
 
             if event_type == RAGEvent.DATABASE_CREATED:
                 self.refresh_databases()
@@ -318,8 +356,8 @@ class RAGController:
                 db_name: str
                 file_path: str
                 db_name, file_path = data
-                self.view.append_logs(f"   Database: {db_name}")
-                self.view.append_logs(f"   File: {file_path}")
+                self._safe_log(f"   Database: {db_name}")
+                self._safe_log(f"   File: {file_path}")
                 self._ingest_file_with_progress(db_name, file_path)
             elif event_type == RAGEvent.DATABASE_DELETED:
                 self.refresh_databases()
@@ -330,10 +368,10 @@ class RAGController:
                 self.refresh_databases()
                 self.view.set_rag_selection(data)
         except Exception as e:
-            self.view.append_logs(f"\n❌ EXCEPTION in _on_rag_model_changed:")
-            self.view.append_logs(f"   Event type: {event_type}")
-            self.view.append_logs(f"   Data: {data}")
-            self.view.append_logs(f"   Error: {e}")
+            self._safe_log(f"\n❌ EXCEPTION in _on_rag_model_changed:")
+            self._safe_log(f"   Event type: {event_type}")
+            self._safe_log(f"   Data: {data}")
+            self._safe_log(f"   Error: {e}")
             traceback.print_exc()
 
     def _ingest_file_with_progress(
@@ -355,7 +393,7 @@ class RAGController:
         def log(msg: str) -> None:
             """Helper to log to both console and progress dialog."""
             if not quiet:
-                self.view.append_logs(msg)
+                self._safe_log(msg)
                 if progress:
                     progress.append_detail(msg)
 
@@ -549,10 +587,10 @@ class RAGController:
                 success_count += 1
             except Exception as e:
                 progress.append_detail(f"  ❌ {type(e).__name__}: {e}")
-                self.view.append_logs(f"\n{'=' * 80}")
-                self.view.append_logs(f"ERROR ingesting {file_name}:")
+                self._safe_log(f"\n{'=' * 80}")
+                self._safe_log(f"ERROR ingesting {file_name}:")
                 traceback.print_exc()
-                self.view.append_logs(f"{'=' * 80}\n")
+                self._safe_log(f"{'=' * 80}\n")
                 error_count += 1
 
             progress.set_progress(idx)
@@ -734,7 +772,7 @@ class RAGController:
         try:
             self.rag_model.toggle_database_selection(db_name)
         except Exception as e:
-            self.view.append_logs(f"Error toggling database '{db_name}': {e}")
+            self._safe_log(f"Error toggling database '{db_name}': {e}")
             traceback.print_exc()
 
     def delete_database(self, db_name: str) -> None:
@@ -744,17 +782,17 @@ class RAGController:
             db_name: Name of the database to delete
         """
         try:
-            self.view.append_logs(f"\n🗑️  Deleting database: {db_name}")
+            self._safe_log(f"\n🗑️  Deleting database: {db_name}")
 
             # Delete from model first
             success, message = self.rag_model.delete_database(db_name)
 
             if not success:
-                self.view.append_logs(f"  ❌ {message}")
+                self._safe_log(f"  ❌ {message}")
                 self.view.show_warning("Delete Failed", message)
                 return
 
-            self.view.append_logs("  ✓ Removed from database list")
+            self._safe_log("  ✓ Removed from database list")
 
             # Try to delete the FAISS vectorstore files
             try:
@@ -764,24 +802,24 @@ class RAGController:
 
                 if index_file.exists():
                     index_file.unlink()
-                    self.view.append_logs(f"  ✓ Deleted {index_file.name}")
+                    self._safe_log(f"  ✓ Deleted {index_file.name}")
 
                 if pkl_file.exists():
                     pkl_file.unlink()
-                    self.view.append_logs(f"  ✓ Deleted {pkl_file.name}")
+                    self._safe_log(f"  ✓ Deleted {pkl_file.name}")
 
             except Exception as file_error:
-                self.view.append_logs(f"  ⚠️  Could not delete vectorstore files: {file_error}")
+                self._safe_log(f"  ⚠️  Could not delete vectorstore files: {file_error}")
 
             # Remove from cache
             if db_name in self._vectorstores:
                 del self._vectorstores[db_name]
-                self.view.append_logs("  ✓ Removed from vectorstore cache")
+                self._safe_log("  ✓ Removed from vectorstore cache")
 
-            self.view.append_logs(f"✓ Database '{db_name}' deleted successfully\n")
+            self._safe_log(f"✓ Database '{db_name}' deleted successfully\n")
 
         except Exception as e:
-            self.view.append_logs(f"❌ Error deleting database '{db_name}': {e}")
+            self._safe_log(f"❌ Error deleting database '{db_name}': {e}")
             traceback.print_exc()
             self.view.show_warning("Delete Error", f"Failed to delete database:\n{e}")
 
@@ -909,7 +947,7 @@ class RAGController:
             vectorstore = self._load_vectorstore(db_name)
             if not vectorstore:
                 if db_name != self._ask_mode_db_name:
-                    self.view.append_logs(f"  ⚠️  Database '{db_name}' not found or empty")
+                    self._safe_log(f"  ⚠️  Database '{db_name}' not found or empty")
                 continue
 
             try:
@@ -918,7 +956,7 @@ class RAGController:
                     results.append(ScoredChunk(doc=doc, score=score))
             except Exception as e:
                 if db_name != self._ask_mode_db_name:
-                    self.view.append_logs(f"Error querying database '{db_name}': {e}")
+                    self._safe_log(f"Error querying database '{db_name}': {e}")
                     traceback.print_exc()
 
         return results
@@ -948,9 +986,7 @@ class RAGController:
             return boosted
 
         if not quiet:
-            self.view.append_logs(
-                f"Filename matches: {', '.join(fname for _, fname in matched_files)}"
-            )
+            self._safe_log(f"Filename matches: {', '.join(fname for _, fname in matched_files)}")
 
         for db_name, target_filename in matched_files:
             vectorstore = self._load_vectorstore(db_name)
@@ -971,14 +1007,12 @@ class RAGController:
 
                 if not quiet:
                     if not file_chunks:
-                        self.view.append_logs(
+                        self._safe_log(
                             f"  Warning: No chunks found for {target_filename} "
                             f"in top {FILENAME_BOOST_EXTRA_K} results"
                         )
                     else:
-                        self.view.append_logs(
-                            f"  Found {len(file_chunks)} chunks from {target_filename}"
-                        )
+                        self._safe_log(f"  Found {len(file_chunks)} chunks from {target_filename}")
 
                 file_chunks.sort(key=lambda x: x[1])
                 for doc, score in file_chunks[: self.rag_model.max_filename_chunks]:
@@ -988,9 +1022,7 @@ class RAGController:
 
             except Exception as e:
                 if not quiet:
-                    self.view.append_logs(
-                        f"Error retrieving boosted chunks from '{target_filename}': {e}"
-                    )
+                    self._safe_log(f"Error retrieving boosted chunks from '{target_filename}': {e}")
 
         return boosted
 
@@ -1035,7 +1067,7 @@ class RAGController:
 
         duplicates_removed = len(raw_results) - len(merged)
         if duplicates_removed > 0 and not quiet:
-            self.view.append_logs(f"Deduplication: removed {duplicates_removed} duplicate chunks")
+            self._safe_log(f"Deduplication: removed {duplicates_removed} duplicate chunks")
 
         return merged
 
@@ -1086,7 +1118,7 @@ class RAGController:
                 filtered.append(chunk)
                 boosted_files_kept.add(chunk.boosted_filename)
                 if not quiet:
-                    self.view.append_logs(
+                    self._safe_log(
                         f"  Preserving boosted chunk from {chunk.boosted_filename} "
                         f"(score: {chunk.score:.4f}, threshold: {adaptive_threshold:.4f})"
                     )
@@ -1226,13 +1258,15 @@ class RAGController:
         )
 
         if not selected_dbs:
-            self.view.set_rag_items([])
+            self.last_rag_display_items = []
+            self._safe_set_rag_items([])
             return ""
 
         try:
             raw_results: list[ScoredChunk] = self._fetch_raw_results(query, selected_dbs, quiet)
             if not raw_results:
-                self.view.set_rag_items([])
+                self.last_rag_display_items = []
+                self._safe_set_rag_items([])
                 return ""
 
             matched_files: list[tuple[str, str]] = self._extract_matching_filenames(
@@ -1250,14 +1284,17 @@ class RAGController:
 
             selected_chunks: list[PackedChunk] = self._greedy_pack_chunks(all_results, max_tokens)
             if not selected_chunks:
-                self.view.set_rag_items([])
+                self.last_rag_display_items = []
+                self._safe_set_rag_items([])
                 return ""
 
-            self.view.set_rag_items(self._build_rag_display_items(selected_chunks, all_results))
+            display_items = self._build_rag_display_items(selected_chunks, all_results)
+            self.last_rag_display_items = display_items
+            self._safe_set_rag_items(display_items)
             return "\n\n---\n\n".join(c.content for c in selected_chunks)
 
         except Exception as e:
-            self.view.append_logs(f"Error querying databases: {e}")
+            self._safe_log(f"Error querying databases: {e}")
             traceback.print_exc()
             return ""
 
@@ -1385,7 +1422,7 @@ class RAGController:
             return self._score_tasks_semantically(tasks, story_content, similarity_threshold)
 
         except ImportError:
-            self.view.append_logs(
+            self._safe_log(
                 "Warning: scikit-learn not available for semantic similarity. "
                 "Falling back to substring matching."
             )
@@ -1393,6 +1430,6 @@ class RAGController:
             return self._score_tasks_by_substring(tasks, story_content)
 
         except Exception as e:
-            self.view.append_logs(f"Error checking outline completion: {e}")
+            self._safe_log(f"Error checking outline completion: {e}")
             traceback.print_exc()
             return OutlineCompletionStatus.empty()
