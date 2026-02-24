@@ -57,9 +57,7 @@ class QtStreamingCallbackHandler(StreamingStdOutCallbackHandler):
                 is_stopped = self.stop_check()
                 if is_stopped:
                     # Signal to stop and raise immediately
-                    self.signals.thinking_signal.emit(
-                        "\n[Stop requested - will interrupt LLM]\n"
-                    )
+                    self.signals.thinking_signal.emit("\n[Stop requested - will interrupt LLM]\n")
                     raise KeyboardInterrupt("Generation stopped by user")
             except KeyboardInterrupt:
                 raise
@@ -76,17 +74,13 @@ class QtStreamingCallbackHandler(StreamingStdOutCallbackHandler):
                     self.accumulated_text += before_think
                     self._check_paragraph_limit()
             self.in_thinking_block = True
-            self.buffer = (
-                self.buffer.split("<think>", 1)[1] if "<think>" in self.buffer else ""
-            )
+            self.buffer = self.buffer.split("<think>", 1)[1] if "<think>" in self.buffer else ""
 
         if "</think>" in self.buffer and self.in_thinking_block:
             thinking_content = self.buffer.split("</think>", 1)[0]
             if thinking_content:
                 self.signals.thinking_signal.emit(thinking_content)
-            after_think = (
-                self.buffer.split("</think>", 1)[1] if "</think>" in self.buffer else ""
-            )
+            after_think = self.buffer.split("</think>", 1)[1] if "</think>" in self.buffer else ""
             self.in_thinking_block = False
             self.buffer = after_think
             if self.buffer and not self.in_thinking_block:
@@ -123,9 +117,7 @@ class QtStreamingCallbackHandler(StreamingStdOutCallbackHandler):
         self.paragraph_count = self.accumulated_text.count("\n\n")
 
         if self.paragraph_count >= self.paragraph_limit:
-            raise KeyboardInterrupt(
-                f"Paragraph limit of {self.paragraph_limit} reached"
-            )
+            raise KeyboardInterrupt(f"Paragraph limit of {self.paragraph_limit} reached")
 
     def on_llm_end(self, *args, **kwargs) -> None:
         """Called when LLM finishes. Emit any remaining buffer."""
@@ -217,15 +209,9 @@ class LLMController:
 
         # Connect signals with Qt.QueuedConnection to ensure execution on main thread
         signals.text_signal.connect(append_text_callback, QtCore.Qt.QueuedConnection)
-        signals.thinking_signal.connect(
-            append_thinking_callback, QtCore.Qt.QueuedConnection
-        )
-        signals.render_markdown_signal.connect(
-            render_markdown_callback, QtCore.Qt.QueuedConnection
-        )
-        signals.set_waiting_signal.connect(
-            set_waiting_callback, QtCore.Qt.QueuedConnection
-        )
+        signals.thinking_signal.connect(append_thinking_callback, QtCore.Qt.QueuedConnection)
+        signals.render_markdown_signal.connect(render_markdown_callback, QtCore.Qt.QueuedConnection)
+        signals.set_waiting_signal.connect(set_waiting_callback, QtCore.Qt.QueuedConnection)
         signals.set_stop_enabled_signal.connect(
             set_stop_enabled_callback, QtCore.Qt.QueuedConnection
         )
@@ -258,9 +244,7 @@ class LLMController:
                 content = [{"type": "text", "text": query}]
                 for payload in image_payloads:
                     data_url = f"data:{payload['mime']};base64,{payload['b64']}"
-                    content.append(
-                        {"type": "image_url", "image_url": {"url": data_url}}
-                    )
+                    content.append({"type": "image_url", "image_url": {"url": data_url}})
 
                 if system_prompt:
                     messages = [
@@ -286,9 +270,7 @@ class LLMController:
             # Check if stop was requested while we were generating
             if self.llm_model.stop_generation:
                 signals.text_signal.emit("\n[Generation stopped by user]\n")
-                signals.thinking_signal.emit(
-                    "\n⏹️ Stop requested - generation halted.\n"
-                )
+                signals.thinking_signal.emit("\n⏹️ Stop requested - generation halted.\n")
             else:
                 # Use signal to trigger markdown rendering on UI thread (only if not stopped)
                 signals.render_markdown_signal.emit()
@@ -298,9 +280,7 @@ class LLMController:
             error_msg = str(e)
             if "stopped by user" in error_msg.lower():
                 signals.text_signal.emit("\n[Generation stopped by user]\n")
-                signals.thinking_signal.emit(
-                    "\n⏹️ Stop requested - generation halted.\n"
-                )
+                signals.thinking_signal.emit("\n⏹️ Stop requested - generation halted.\n")
         except Exception as e:
             # Use signal to append error text on UI thread
             signals.text_signal.emit(f"\n[error] {e}\n")
@@ -339,9 +319,7 @@ class LLMController:
 
         # Connect signals
         signals.text_signal.connect(stream_callback, QtCore.Qt.QueuedConnection)
-        signals.completed_signal.connect(
-            completion_callback, QtCore.Qt.QueuedConnection
-        )
+        signals.completed_signal.connect(completion_callback, QtCore.Qt.QueuedConnection)
         signals.set_stop_enabled_signal.connect(
             set_stop_enabled_callback, QtCore.Qt.QueuedConnection
         )
@@ -405,11 +383,13 @@ class LLMController:
             signals.completed_signal.emit()
 
         except KeyboardInterrupt:
-            # User stopped generation
-            pass
+            # User stopped generation — still fire completed so the caller can clean up
+            # (e.g. show the accept/reject widget so the user can reject the partial text)
+            signals.completed_signal.emit()
         except Exception as e:
-            # Emit error as text
+            # Emit error as text, then fire completed so the overlay is never orphaned
             signals.text_signal.emit(f"\n[error] {e}\n")
+            signals.completed_signal.emit()
         finally:
             try:
                 # Disable stop button
@@ -431,9 +411,7 @@ class LLMController:
         try:
             summary_prompt = self.settings_model.summary_prompt_template
 
-            append_thinking_callback(
-                f"\n🔍 Using summary template ({len(summary_prompt)} chars)\n"
-            )
+            append_thinking_callback(f"\n🔍 Using summary template ({len(summary_prompt)} chars)\n")
 
             if not summary_prompt.endswith("\n\n"):
                 if not summary_prompt.endswith("\n"):
@@ -444,7 +422,9 @@ class LLMController:
             summary_prompt += f"STORY TO SUMMARIZE:\n{story_text}\n\n"
 
             if supplemental_text:
-                summary_prompt += f"ADDITIONAL CONTEXT (incorporate these details):\n{supplemental_text}\n\n"
+                summary_prompt += (
+                    f"ADDITIONAL CONTEXT (incorporate these details):\n{supplemental_text}\n\n"
+                )
 
             summary_prompt += "DETAILED SUMMARY:"
 
@@ -459,9 +439,7 @@ class LLMController:
             )
 
             response = llm_no_streaming.invoke([HumanMessage(content=summary_prompt)])
-            summary = (
-                response.content if hasattr(response, "content") else str(response)
-            )
+            summary = response.content if hasattr(response, "content") else str(response)
 
             return summary
         except Exception as e:
@@ -487,9 +465,7 @@ class LLMController:
         self._cached_chunks = None
         self._cached_chunks_hash = None
 
-    def summarize_supplemental(
-        self, supp_text: str, max_tokens: int
-    ) -> tuple[str, int]:
+    def summarize_supplemental(self, supp_text: str, max_tokens: int) -> tuple[str, int]:
         """Summarize supplemental prompts to fit within token limit.
 
         Args:
@@ -520,9 +496,7 @@ class LLMController:
 
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
-                response = llm_no_streaming.invoke(
-                    [HumanMessage(content=summary_prompt)]
-                )
+                response = llm_no_streaming.invoke([HumanMessage(content=summary_prompt)])
 
             if hasattr(response, "content"):
                 condensed = response.content
@@ -545,9 +519,7 @@ class LLMController:
             tokens = StoryModel.estimate_token_count(truncated)
             return f"[CONDENSED SUPPLEMENTAL]:\n{truncated}", tokens
 
-    def summarize_system_prompt(
-        self, system_prompt: str, max_tokens: int
-    ) -> tuple[str, int]:
+    def summarize_system_prompt(self, system_prompt: str, max_tokens: int) -> tuple[str, int]:
         """Summarize system prompt to fit within token limit.
 
         Args:
@@ -578,9 +550,7 @@ class LLMController:
 
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
-                response = llm_no_streaming.invoke(
-                    [HumanMessage(content=summary_prompt)]
-                )
+                response = llm_no_streaming.invoke([HumanMessage(content=summary_prompt)])
 
             if hasattr(response, "content"):
                 condensed = response.content
@@ -603,9 +573,7 @@ class LLMController:
             tokens = StoryModel.estimate_token_count(truncated)
             return truncated, tokens
 
-    def summarize_rag_context(
-        self, rag_context: str, max_tokens: int
-    ) -> tuple[str, int]:
+    def summarize_rag_context(self, rag_context: str, max_tokens: int) -> tuple[str, int]:
         """Summarize RAG context to fit within token limit.
 
         Args:
@@ -635,9 +603,7 @@ class LLMController:
 
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
-                response = llm_no_streaming.invoke(
-                    [HumanMessage(content=summary_prompt)]
-                )
+                response = llm_no_streaming.invoke([HumanMessage(content=summary_prompt)])
 
             if hasattr(response, "content"):
                 condensed = response.content
@@ -676,9 +642,7 @@ class LLMController:
         try:
             # Build the generation prompt
             generation_prompt = (
-                f"{notes_prompt_template}\n\n"
-                f"STORY CONTEXT:\n{story_context}\n\n"
-                "GENERATED NOTES:"
+                f"{notes_prompt_template}\n\nSTORY CONTEXT:\n{story_context}\n\nGENERATED NOTES:"
             )
 
             model_name = getattr(self.llm, "model_name", None)
@@ -700,9 +664,7 @@ class LLMController:
 
                 if on_chunk_callback:
                     # Use streaming with thinking block filtering
-                    for chunk in llm_for_notes.stream(
-                        [HumanMessage(content=generation_prompt)]
-                    ):
+                    for chunk in llm_for_notes.stream([HumanMessage(content=generation_prompt)]):
                         if hasattr(chunk, "content"):
                             text = chunk.content
                         elif hasattr(chunk, "text"):
@@ -718,17 +680,11 @@ class LLMController:
                                     generated_notes += before_think
                                     on_chunk_callback(before_think)
                                 in_thinking_block = True
-                                text = (
-                                    text.split("<think>", 1)[1]
-                                    if "<think>" in text
-                                    else ""
-                                )
+                                text = text.split("<think>", 1)[1] if "<think>" in text else ""
 
                             if "</think>" in text and in_thinking_block:
                                 after_think = (
-                                    text.split("</think>", 1)[1]
-                                    if "</think>" in text
-                                    else ""
+                                    text.split("</think>", 1)[1] if "</think>" in text else ""
                                 )
                                 in_thinking_block = False
                                 text = after_think
@@ -738,9 +694,7 @@ class LLMController:
                                 on_chunk_callback(text)
                 else:
                     # Non-streaming
-                    response = llm_for_notes.invoke(
-                        [HumanMessage(content=generation_prompt)]
-                    )
+                    response = llm_for_notes.invoke([HumanMessage(content=generation_prompt)])
                     if hasattr(response, "content"):
                         generated_notes = response.content
                     elif hasattr(response, "text"):
@@ -760,9 +714,7 @@ class LLMController:
             # Return empty notes on error
             return "", 0
 
-    def summarize_chunk(
-        self, chunk_text: str, append_thinking_callback
-    ) -> tuple[str, int]:
+    def summarize_chunk(self, chunk_text: str, append_thinking_callback) -> tuple[str, int]:
         """Summarize a single chunk of story text.
 
         Args:
@@ -794,9 +746,7 @@ class LLMController:
             # Suppress warnings during invoke
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
-                response = llm_no_streaming.invoke(
-                    [HumanMessage(content=summary_prompt)]
-                )
+                response = llm_no_streaming.invoke([HumanMessage(content=summary_prompt)])
 
             # Extract content safely
             if hasattr(response, "content"):
@@ -865,9 +815,7 @@ class LLMController:
             # Suppress warnings during invoke
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
-                response = llm_no_streaming.invoke(
-                    [HumanMessage(content=compression_prompt)]
-                )
+                response = llm_no_streaming.invoke([HumanMessage(content=compression_prompt)])
 
             # Extract content safely
             if hasattr(response, "content"):
@@ -934,9 +882,7 @@ class LLMController:
         signals.thinking_signal.connect(thinking_callback, QtCore.Qt.QueuedConnection)
         signals.completed_signal.connect(completed_callback, QtCore.Qt.QueuedConnection)
         signals.error_signal.connect(error_callback, QtCore.Qt.QueuedConnection)
-        signals.set_waiting_signal.connect(
-            set_waiting_callback, QtCore.Qt.QueuedConnection
-        )
+        signals.set_waiting_signal.connect(set_waiting_callback, QtCore.Qt.QueuedConnection)
 
         # Start background thread
         thread = threading.Thread(
@@ -971,14 +917,10 @@ class LLMController:
         """
         try:
             # Extract recent content
-            raw_recent, split_pos = StoryModel.extract_recent_content(
-                current_story, max_raw_tokens
-            )
+            raw_recent, split_pos = StoryModel.extract_recent_content(current_story, max_raw_tokens)
             raw_tokens = StoryModel.estimate_token_count(raw_recent)
 
-            signals.thinking_signal.emit(
-                f"✓ Extracted {raw_tokens} tokens of recent content\n"
-            )
+            signals.thinking_signal.emit(f"✓ Extracted {raw_tokens} tokens of recent content\n")
 
             # Check if there's older content
             if split_pos > 0:
@@ -991,18 +933,13 @@ class LLMController:
 
                 # Chunk the older content (use session cache to avoid re-chunking)
                 older_hash = hashlib.md5(older_content.encode("utf-8")).hexdigest()
-                if (
-                    self._cached_chunks_hash == older_hash
-                    and self._cached_chunks is not None
-                ):
+                if self._cached_chunks_hash == older_hash and self._cached_chunks is not None:
                     chunks = self._cached_chunks
                     signals.thinking_signal.emit(
                         f"Using cached {len(chunks)} chunks from session memory\n"
                     )
                 else:
-                    chunks = StoryModel.chunk_text(
-                        older_content, target_chunk_tokens=3000
-                    )
+                    chunks = StoryModel.chunk_text(older_content, target_chunk_tokens=3000)
                     # Cache for rest of session
                     self._cached_chunks = chunks
                     self._cached_chunks_hash = older_hash
@@ -1025,13 +962,9 @@ class LLMController:
                     def thinking_cb(text):
                         signals.thinking_signal.emit(text)
 
-                    chunk_summary, summary_tokens = self.summarize_chunk(
-                        chunk_text, thinking_cb
-                    )
+                    chunk_summary, summary_tokens = self.summarize_chunk(chunk_text, thinking_cb)
 
-                    signals.thinking_signal.emit(
-                        f"  → Summarized to {summary_tokens} tokens\n"
-                    )
+                    signals.thinking_signal.emit(f"  → Summarized to {summary_tokens} tokens\n")
 
                     # Check if we need to compress rolling summary
                     combined_tokens = rolling_tokens + summary_tokens
@@ -1048,29 +981,21 @@ class LLMController:
                             thinking_cb,
                         )
 
-                        signals.thinking_signal.emit(
-                            f"  ✓ Compressed to {rolling_tokens} tokens\n"
-                        )
+                        signals.thinking_signal.emit(f"  ✓ Compressed to {rolling_tokens} tokens\n")
                     else:
                         # Just append to rolling summary
                         if rolling_summary:
                             rolling_summary = f"{rolling_summary}\n\n{chunk_summary}"
                         else:
                             rolling_summary = chunk_summary
-                        rolling_tokens = StoryModel.estimate_token_count(
-                            rolling_summary
-                        )
+                        rolling_tokens = StoryModel.estimate_token_count(rolling_summary)
 
                 # Update the summary model
                 summary_model.update_rolling_summary(rolling_summary, rolling_tokens)
 
                 signals.thinking_signal.emit(f"\n{'=' * 60}\n")
-                signals.thinking_signal.emit(
-                    f"✅ Rolling summary: {rolling_tokens} tokens\n"
-                )
-                signals.thinking_signal.emit(
-                    f"✅ Recent content: {raw_tokens} tokens\n"
-                )
+                signals.thinking_signal.emit(f"✅ Rolling summary: {rolling_tokens} tokens\n")
+                signals.thinking_signal.emit(f"✅ Recent content: {raw_tokens} tokens\n")
                 signals.thinking_signal.emit(
                     f"✅ Total story context: {rolling_tokens + raw_tokens} tokens\n"
                 )
@@ -1121,15 +1046,9 @@ class LLMController:
 
         # Connect signals with Qt.QueuedConnection to ensure execution on main thread
         signals.text_signal.connect(append_text_callback, QtCore.Qt.QueuedConnection)
-        signals.thinking_signal.connect(
-            append_thinking_callback, QtCore.Qt.QueuedConnection
-        )
-        signals.render_markdown_signal.connect(
-            on_complete_callback, QtCore.Qt.QueuedConnection
-        )
-        signals.set_waiting_signal.connect(
-            set_waiting_callback, QtCore.Qt.QueuedConnection
-        )
+        signals.thinking_signal.connect(append_thinking_callback, QtCore.Qt.QueuedConnection)
+        signals.render_markdown_signal.connect(on_complete_callback, QtCore.Qt.QueuedConnection)
+        signals.set_waiting_signal.connect(set_waiting_callback, QtCore.Qt.QueuedConnection)
         signals.set_stop_enabled_signal.connect(
             set_stop_enabled_callback, QtCore.Qt.QueuedConnection
         )
@@ -1169,31 +1088,27 @@ class LLMController:
             # Check if stop was requested while we were generating
             if self.llm_model.stop_generation:
                 signals.text_signal.emit("\n[Generation stopped by user]\n")
-                signals.thinking_signal.emit(
-                    "\n⏹️ Stop requested - generation halted.\n"
-                )
-            else:
-                # Use signal to trigger completion callback on UI thread (only if not stopped)
-                signals.render_markdown_signal.emit()
+                signals.thinking_signal.emit("\n⏹️ Stop requested - generation halted.\n")
+            # Always fire completion callback so the caller can update UI state
+            signals.render_markdown_signal.emit()
 
         except KeyboardInterrupt as e:
             # Check if it was user-initiated stop or paragraph limit
             error_msg = str(e)
             if "stopped by user" in error_msg.lower():
                 signals.text_signal.emit("\n[Generation stopped by user]\n")
-                signals.thinking_signal.emit(
-                    "\n⏹️ Stop requested - generation halted.\n"
-                )
+                signals.thinking_signal.emit("\n⏹️ Stop requested - generation halted.\n")
             elif "Paragraph limit" in error_msg:
-                # Paragraph limit reached - this is normal, no error message needed
+                # Paragraph limit reached - normal chunk end, no message needed
                 pass
             else:
-                signals.thinking_signal.emit(
-                    f"\n⏹️ Generation interrupted: {error_msg}\n"
-                )
+                signals.thinking_signal.emit(f"\n⏹️ Generation interrupted: {error_msg}\n")
+            # Always fire completion so _on_chunk_complete can call _stop_build / advance
+            signals.render_markdown_signal.emit()
         except Exception as e:
-            # Use signal to append error text on UI thread
             signals.text_signal.emit(f"\n[error] {e}\n")
+            # Fire completion even on hard error so the UI can recover
+            signals.render_markdown_signal.emit()
         finally:
             try:
                 # Use signal to hide progress bar on UI thread

@@ -8,7 +8,7 @@ from models.stylesheets import (
     LLM_PANEL_DROP_OVERLAY_STYLE,
 )
 from views.search_widget import SearchWidget
-from views.custom_widgets import AutoGrowTextEdit
+from views.custom_widgets import AutoGrowTextEdit, OutlineTrackerWidget
 
 
 class LLMPanel(QtWidgets.QWidget):
@@ -20,9 +20,11 @@ class LLMPanel(QtWidgets.QWidget):
     mode_changed = QtCore.pyqtSignal(str)  # "Write", "Ask", "Planning", "Story Mode"
     model_changed = QtCore.pyqtSignal(str)
     model_refresh_clicked = QtCore.pyqtSignal()
-    start_writing_requested = QtCore.pyqtSignal(
-        str
-    )  # Emits outline when user types "Start Writing"
+    start_writing_requested = QtCore.pyqtSignal(str)  # Emits outline when Start Writing is clicked
+    continue_writing_requested = (
+        QtCore.pyqtSignal()
+    )  # Emits when Continue is clicked between sections
+    redo_section_requested = QtCore.pyqtSignal(int)  # Emits section index when ↺ is clicked
     outline_changed = QtCore.pyqtSignal(str)  # Emits when outline is edited
 
     def __init__(self):
@@ -31,9 +33,7 @@ class LLMPanel(QtWidgets.QWidget):
         self.search_widget = None
         self.message_history = []  # Store message history as list of (type, text) tuples
         self.user_message_history = []  # Store only user messages for navigation
-        self.history_index = (
-            -1
-        )  # Current position in history (-1 = current/new message)
+        self.history_index = -1  # Current position in history (-1 = current/new message)
         self.current_draft = ""  # Store current unsent message when navigating history
         self._attached_files = []
         self._rag_selected = []
@@ -46,6 +46,7 @@ class LLMPanel(QtWidgets.QWidget):
         self._in_planning_mode = False
         self._planning_conversation = []  # List of {"role": str, "content": str}
         self._current_outline = ""  # Current outline text (editable)
+        self._writing_active = False  # True once Start Writing has been clicked
 
         self._init_ui()
 
@@ -76,9 +77,7 @@ class LLMPanel(QtWidgets.QWidget):
         self.thinking_text.setOpenLinks(False)
         self.thinking_text.anchorClicked.connect(self._on_thinking_anchor_clicked)
         self.thinking_text.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
-        self.thinking_text.customContextMenuRequested.connect(
-            self._show_output_context_menu
-        )
+        self.thinking_text.customContextMenuRequested.connect(self._show_output_context_menu)
         thinking_container_layout.addWidget(self.thinking_text, stretch=1)
 
         thinking_container.setLayout(thinking_container_layout)
@@ -90,6 +89,43 @@ class LLMPanel(QtWidgets.QWidget):
         thinking_container_layout.insertWidget(0, self.search_widget)
 
         layout.addWidget(thinking_container, stretch=1)
+
+        # Outline tracker (shown while writing in planning mode)
+        self.outline_tracker = OutlineTrackerWidget()
+        self.outline_tracker.hide()
+        self.outline_tracker.redo_requested.connect(self.redo_section_requested)
+        layout.addWidget(self.outline_tracker)
+
+        # Writing bar: Start Writing / Continue button + chunks-per-section spinbox
+        self._writing_bar = QtWidgets.QWidget()
+        writing_bar_layout = QtWidgets.QHBoxLayout(self._writing_bar)
+        writing_bar_layout.setContentsMargins(5, 4, 5, 4)
+        writing_bar_layout.setSpacing(8)
+
+        self._start_writing_button = QtWidgets.QPushButton("▶ Start Writing")
+        self._start_writing_button.setCursor(QtCore.Qt.PointingHandCursor)
+        self._start_writing_button.setStyleSheet(
+            "QPushButton { background: #2a5a2a; color: #ccffcc; border: 1px solid #3a8a3a;"
+            " border-radius: 4px; padding: 4px 10px; font-weight: bold; }"
+            "QPushButton:hover { background: #3a7a3a; }"
+            "QPushButton:disabled { background: #2a2a2a; color: #555; border-color: #444; }"
+        )
+        self._start_writing_button.clicked.connect(self._on_writing_button_clicked)
+        writing_bar_layout.addWidget(self._start_writing_button, stretch=1)
+
+        chunks_label = QtWidgets.QLabel("Chunks/section:")
+        chunks_label.setStyleSheet("color: #aaaaaa; font-size: 11px;")
+        writing_bar_layout.addWidget(chunks_label)
+
+        self._chunks_spinbox = QtWidgets.QSpinBox()
+        self._chunks_spinbox.setRange(1, 10)
+        self._chunks_spinbox.setValue(2)
+        self._chunks_spinbox.setFixedWidth(52)
+        self._chunks_spinbox.setToolTip("Number of LLM generation passes per outline section")
+        writing_bar_layout.addWidget(self._chunks_spinbox)
+
+        self._writing_bar.hide()
+        layout.addWidget(self._writing_bar)
 
         # Progress bar (between thinking text and input field)
         self.wait_progress = QtWidgets.QProgressBar()
@@ -111,9 +147,7 @@ class LLMPanel(QtWidgets.QWidget):
         )
         self.input_field.setAcceptDrops(False)
         self.input_field.send_signal.connect(self._on_send)
-        self.input_field.installEventFilter(
-            self
-        )  # Install event filter for arrows + drop
+        self.input_field.installEventFilter(self)  # Install event filter for arrows + drop
 
         input_row = QtWidgets.QHBoxLayout()
         input_row.setContentsMargins(0, 0, 0, 0)
@@ -169,26 +203,20 @@ class LLMPanel(QtWidgets.QWidget):
             "Story Mode: Continuous writing with RAG (N chunks)"
             "Write: Story continuation mode\n"
         )
-        self.mode_combo.currentTextChanged.connect(
-            lambda text: self.mode_changed.emit(text)
-        )
+        self.mode_combo.currentTextChanged.connect(lambda text: self.mode_changed.emit(text))
         control_layout.addWidget(self.mode_combo)
 
         # Model dropdown (no label)
         self.model_combo = QtWidgets.QComboBox()
         self.model_combo.setMinimumWidth(150)
-        self.model_combo.currentTextChanged.connect(
-            lambda text: self.model_changed.emit(text)
-        )
+        self.model_combo.currentTextChanged.connect(lambda text: self.model_changed.emit(text))
         control_layout.addWidget(self.model_combo, stretch=1)
 
         # Refresh button
         self.model_refresh_button = QtWidgets.QPushButton("↻")
         self.model_refresh_button.setToolTip("Refresh Models")
         self.model_refresh_button.setFixedWidth(30)
-        self.model_refresh_button.clicked.connect(
-            lambda: self.model_refresh_clicked.emit()
-        )
+        self.model_refresh_button.clicked.connect(lambda: self.model_refresh_clicked.emit())
         control_layout.addWidget(self.model_refresh_button)
 
         control_bar.setLayout(control_layout)
@@ -205,9 +233,7 @@ class LLMPanel(QtWidgets.QWidget):
         self._drop_overlay.setAlignment(QtCore.Qt.AlignCenter)
         self._drop_overlay.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents, True)
         self._drop_overlay.setStyleSheet(LLM_PANEL_DROP_OVERLAY_STYLE)
-        self._drop_overlay.setGeometry(
-            8, 8, max(0, self.width() - 16), max(0, self.height() - 16)
-        )
+        self._drop_overlay.setGeometry(8, 8, max(0, self.width() - 16), max(0, self.height() - 16))
         self._drop_overlay.hide()
 
         # Add Ctrl+F shortcut for search
@@ -268,36 +294,6 @@ class LLMPanel(QtWidgets.QWidget):
         # Get the user's message before clearing
         user_message = self.get_user_input()
         if user_message:
-            # Check if in planning mode and message is "Start Writing"
-            if (
-                self._in_planning_mode
-                and user_message.strip().lower() == "start writing"
-            ):
-                # Use stored outline (structured) instead of parsing conversation
-                outline = self._current_outline
-                if not outline or not outline.strip():
-                    # No valid outline found
-                    self.append_llm_panel_text(
-                        "\n⚠️ **No outline found.** Please ask me to create an outline first before typing 'Start Writing'.\n\n"
-                    )
-                    self.clear_user_input()
-                    return
-
-                # Validate outline has at least one unchecked item
-                has_unchecked = "- [ ]" in outline
-                if not has_unchecked:
-                    self.append_llm_panel_text(
-                        "\n⚠️ **Outline has no remaining tasks.** The outline should contain unchecked items (- [ ]) to write.\n\n"
-                    )
-                    self.clear_user_input()
-                    return
-
-                # Valid outline exists, proceed with start writing
-                self.start_writing_requested.emit(outline)
-                # Clear input but don't add to history for "Start Writing" command
-                self.clear_user_input()
-                return
-
             if self._in_planning_mode:
                 self.user_message_history.append(user_message)
             else:
@@ -873,9 +869,7 @@ class LLMPanel(QtWidgets.QWidget):
             was_at_bottom = self._is_view_at_bottom()
             scroll_value = bar.value()
             html_parts = []
-            html_parts.append(
-                '<div style="font-family: sans-serif; line-height: 1.6;">'
-            )
+            html_parts.append('<div style="font-family: sans-serif; line-height: 1.6;">')
 
             if self._rag_items:
                 rag_items_text = "\n".join(f"• {item}" for item in self._rag_items)
@@ -969,12 +963,62 @@ class LLMPanel(QtWidgets.QWidget):
 
     @QtCore.pyqtSlot(str)
     def set_current_outline(self, outline):
-        """Set the current outline.
+        """Set the current outline and show the writing bar.
 
         Args:
             outline: Outline text in markdown checklist format
         """
         self._current_outline = outline
+        # Show the writing bar whenever a new outline arrives (reset writing state)
+        self._writing_active = False
+        self._start_writing_button.setText("▶ Start Writing")
+        self._start_writing_button.setEnabled(True)
+        self._writing_bar.show()
+
+    @QtCore.pyqtSlot(str)
+    def set_outline_sections_json(self, sections_json: str):
+        """Populate the outline tracker from a JSON-encoded list of sections.
+
+        Args:
+            sections_json: JSON string of list of dicts with 'description', 'details',
+                           'completed' keys — mirrors OutlinePlotPoint.
+        """
+        import json
+
+        try:
+            sections = json.loads(sections_json)
+            self.outline_tracker.set_sections(sections)
+            self.outline_tracker.show()
+        except Exception as e:
+            print(f"OutlineTrackerWidget: failed to parse sections JSON: {e}")
+
+    def get_chunks_per_section(self) -> int:
+        """Return the current chunks-per-section value from the spinbox."""
+        return self._chunks_spinbox.value()
+
+    def set_writing_started(self):
+        """Called once Start Writing is processed — switches button to Continue mode."""
+        self._writing_active = True
+        self._start_writing_button.setText("▶ Continue")
+        self._start_writing_button.setEnabled(False)
+
+    def set_section_writing(self, generating: bool):
+        """Enable/disable the Continue button based on whether generation is in progress.
+
+        Args:
+            generating: True while the LLM is writing; False when paused between sections.
+        """
+        self._start_writing_button.setEnabled(not generating)
+
+    def _on_writing_button_clicked(self):
+        """Handle Start Writing / Continue button click."""
+        if self._writing_active:
+            self._start_writing_button.setEnabled(False)
+            self.continue_writing_requested.emit()
+        else:
+            outline = self._current_outline
+            if outline:
+                self.start_writing_requested.emit(outline)
 
     def display_planning_welcome(self, welcome_text):
         """Display welcome message for planning mode."""

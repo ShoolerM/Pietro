@@ -6,6 +6,7 @@ Handles all planning mode logic including:
 - Outline-driven story generation
 """
 
+import json
 import threading
 import traceback
 from typing import Optional, Dict, Any, Callable, List
@@ -41,6 +42,10 @@ class PlanningController(QtCore.QObject):
         self.notes_controller = notes_controller
         self.view = view
         self.baml_controller = baml_controller
+
+        # Section position tracking for redo support
+        self._section_start_positions: Dict[int, int] = {}
+        self._section_end_positions: Dict[int, int] = {}
 
         # Callbacks for delegation back to main controller
         self._on_notes_ready_callback: Optional[Callable] = None
@@ -223,6 +228,21 @@ class PlanningController(QtCore.QObject):
                 QtCore.Qt.QueuedConnection,
                 QtCore.Q_ARG(str, outline_text),
             )
+            # Populate the outline tracker with structured section data
+            sections_data = [
+                {
+                    "description": p.description,
+                    "details": getattr(p, "details", None) or "",
+                    "completed": p.completed,
+                }
+                for p in plot_points
+            ]
+            QtCore.QMetaObject.invokeMethod(
+                self.view.llm_panel,
+                "set_outline_sections_json",
+                QtCore.Qt.QueuedConnection,
+                QtCore.Q_ARG(str, json.dumps(sections_data)),
+            )
             self.settings_model.save_planning_conversation(
                 self.view.llm_panel.get_planning_conversation(),
                 outline_text,
@@ -398,7 +418,6 @@ class PlanningController(QtCore.QObject):
             "current_task_index": 0,
             "chunk_count": 0,
             "task_chunk_count": 0,
-            "max_chunks_per_task": 2,
             "paragraphs_per_chunk": 3,
             "chunks_before_summary": 3,
             "last_rag_context": None,
@@ -406,6 +425,10 @@ class PlanningController(QtCore.QObject):
 
         self.planning_model.build_state = build_state
         self.planning_model.is_active = True
+
+        # Reset section position tracking
+        self._section_start_positions = {}
+        self._section_end_positions = {}
 
         # Reset stop flag
         self.llm_controller.llm_model.reset_stop_flag()
@@ -428,7 +451,25 @@ class PlanningController(QtCore.QObject):
         current_story = self.view.get_story_content()
         self.view.set_story_content(current_story)
 
+        # Initialise tracker and writing bar
+        self.view.llm_panel.outline_tracker.set_active(0)
+        self.view.llm_panel.set_writing_started()
+        self.view.llm_panel.set_section_writing(True)
+
         # Start first chunk
+        self.generate_next_chunk()
+
+    def resume_writing(self):
+        """Resume generation after a stop or pause.
+
+        Resets the stop flag so generation can proceed, then calls
+        ``generate_next_chunk``.  Safe to call when already active (no-op guard
+        in ``generate_next_chunk``).
+        """
+        self.llm_controller.llm_model.reset_stop_flag()
+        self.planning_model.is_active = True
+        self.view.llm_panel.set_section_writing(True)
+        self.view.set_stop_enabled(True)
         self.generate_next_chunk()
 
     def generate_next_chunk(self):
@@ -452,11 +493,20 @@ class PlanningController(QtCore.QObject):
         state["chunk_count"] += 1
         state["task_chunk_count"] += 1
 
+        # Disable Continue button while generating
+        self.view.llm_panel.set_section_writing(True)
+
+        # Record section start position on first chunk of each section
+        if state["task_chunk_count"] == 1:
+            self._section_start_positions[state["current_task_index"]] = len(
+                self.view.get_story_content()
+            )
+
         # Log progress
         self.view.append_logs(f"\n{'─' * 60}\n")
         self.view.append_logs(
             f"📝 PLOT POINT {state['current_task_index'] + 1}/{len(state['original_tasks'])} "
-            f"(Chunk {state['task_chunk_count']}/{state['max_chunks_per_task']})\n"
+            f"(Chunk {state['task_chunk_count']}/{self.view.llm_panel.get_chunks_per_section()})\n"
         )
         task_preview = current_task[:80] + "..." if len(current_task) > 80 else current_task
         self.view.append_logs(f"Task: {task_preview}\n")
@@ -719,13 +769,27 @@ class PlanningController(QtCore.QObject):
 
         task_addressed = completion_status.completion_ratio >= 0.5
 
-        if task_addressed or state["task_chunk_count"] >= state["max_chunks_per_task"]:
+        max_chunks = self.view.llm_panel.get_chunks_per_section()
+        task_advanced = task_addressed or state["task_chunk_count"] >= max_chunks
+
+        if task_advanced:
+            completed_index = state["current_task_index"]
             if not task_addressed:
                 self.view.append_logs("  • Max chunks reached for this plot point; moving on...\n")
             else:
                 self.view.append_logs("  ✓ Plot point addressed! Moving to next...\n")
             state["current_task_index"] += 1
             state["task_chunk_count"] = 0
+
+            # Record section end position and update tracker
+            self._section_end_positions[completed_index] = len(current_story)
+            self.view.llm_panel.outline_tracker.mark_complete(completed_index)
+            next_idx = state["current_task_index"]
+            if next_idx < len(state["original_tasks"]):
+                self.view.llm_panel.outline_tracker.set_active(next_idx)
+
+            # Flag to pause after optional notes generation
+            state["_should_pause"] = True
         else:
             self.view.append_logs("  • Continuing with current plot point...\n")
 
@@ -741,12 +805,24 @@ class PlanningController(QtCore.QObject):
             )
             return
 
-        # Trigger callback if set
-        if self._on_chunk_complete_callback:
-            self._on_chunk_complete_callback()
+        # Decide: pause between sections, finish, or continue same task
+        if state.pop("_should_pause", False):
+            if state["current_task_index"] >= len(state["original_tasks"]):
+                if self._on_chunk_complete_callback:
+                    self._on_chunk_complete_callback()
+                else:
+                    self._finish_build()
+            else:
+                if self._on_chunk_complete_callback:
+                    self._on_chunk_complete_callback()
+                else:
+                    self._do_pause_between_sections()
         else:
-            # Default: continue to next chunk
-            QtCore.QTimer.singleShot(100, self.generate_next_chunk)
+            # Same task — continue writing
+            if self._on_chunk_complete_callback:
+                self._on_chunk_complete_callback()
+            else:
+                QtCore.QTimer.singleShot(100, self.generate_next_chunk)
 
     def _finish_build(self):
         """Finish outline-driven build."""
@@ -762,6 +838,9 @@ class PlanningController(QtCore.QObject):
 
         self.view.set_waiting(False)
         self.view.set_stop_enabled(False)
+        self.view.llm_panel.set_section_writing(
+            True
+        )  # leave button disabled — nothing left to write
         self.story_model.planning_active = False
         self.planning_model.is_active = False
         self.planning_model.reset_build_state()
@@ -778,10 +857,15 @@ class PlanningController(QtCore.QObject):
             f"Completed {state['current_task_index']}/{len(state['original_tasks'])} plot points.\n"
         )
         self.view.append_logs(f"Generated {state['chunk_count']} chunks.\n")
+        self.view.append_logs(
+            "\u23f8\ufe0f  Section may be incomplete. "
+            "Click '\u25b6 Continue' to append more text, or '\u21ba' to rewrite it from scratch.\n"
+        )
         self.view.append_logs(f"{'=' * 60}\n")
 
         self.view.set_waiting(False)
         self.view.set_stop_enabled(False)
+        self.view.llm_panel.set_section_writing(False)  # re-enable Continue so user can resume
         self.planning_model.is_active = False
 
     def _on_build_error(self, error_msg: str):
@@ -790,9 +874,13 @@ class PlanningController(QtCore.QObject):
         Args:
             error_msg: Error message
         """
-        self.view.append_logs(f"\n❌ Error during planning build: {error_msg}\n")
-        self.view.append_logs("Planning build stopped.\n")
+        self.view.append_logs(f"\n\u274c Error during planning build: {error_msg}\n")
+        self.view.append_logs(
+            "\u23f8\ufe0f  Section may be incomplete. "
+            "Click '\u25b6 Continue' to retry, or '\u21ba' to rewrite from scratch.\n"
+        )
         self.view.set_stop_enabled(False)
+        self.view.llm_panel.set_section_writing(False)  # re-enable Continue so user can retry
         self.planning_model.is_active = False
 
     def _should_regenerate_notes(self, current_story: str) -> bool:
@@ -822,5 +910,70 @@ class PlanningController(QtCore.QObject):
 
         if self._on_chunk_complete_callback:
             self._on_chunk_complete_callback()
+            return
+
+        state = self.planning_model.build_state
+        if state and state.pop("_should_pause", False):
+            if state["current_task_index"] >= len(state["original_tasks"]):
+                self._finish_build()
+            else:
+                self._do_pause_between_sections()
         else:
             QtCore.QTimer.singleShot(100, self.generate_next_chunk)
+
+    def _do_pause_between_sections(self):
+        """Pause generation and wait for the user to click Continue."""
+        self.view.set_waiting(False)
+        self.view.append_logs(
+            "\n⏸️  Section complete — click '\u25b6 Continue' to write the next section.\n"
+        )
+        self.view.llm_panel.set_section_writing(False)
+
+    def rewrite_section_with_diff(self, section_index: int, completion_callback: Callable):
+        """Rewrite a completed section using the diff overlay (red → green accept/reject).
+
+        Args:
+            section_index: Zero-based index of the outline section to redo.
+            completion_callback: Called when LLM finishes streaming (shows accept/reject UI).
+        """
+        state = self.planning_model.build_state
+        if not state:
+            return
+
+        start_pos = self._section_start_positions.get(section_index)
+        if start_pos is None:
+            return
+
+        # Build query using story truncated to the section's start position so the
+        # LLM only sees what came before this section.
+        story_up_to_section = self.view.get_story_content()[:start_pos]
+
+        # Point build state at this section for _build_chunk_query
+        state["current_task_index"] = section_index
+        state["task_chunk_count"] = 0
+        current_task = state["original_tasks"][section_index]
+
+        # Re-query RAG for fresh context
+        context_limit = self.settings_model.context_limit
+        outline_tokens = self.story_model.estimate_token_count(state["outline"])
+        system_tokens = self.story_model.estimate_token_count(state["system_prompt"])
+        story_tokens = self.story_model.estimate_token_count(story_up_to_section)
+        available = context_limit - story_tokens - outline_tokens - system_tokens - 2000
+        max_rag_tokens = max(500, min(int(available * 0.25), 3000))
+        rag_context = self.rag_controller.query_databases(current_task, max_tokens=max_rag_tokens)
+        state["last_rag_context"] = rag_context
+
+        query = self._build_chunk_query(state, story_up_to_section, current_task, rag_context)
+
+        self.view.append_logs(f"\n\u21ba Rewriting section {section_index + 1} via diff...\n")
+        self.view.set_waiting(True)
+        self.llm_controller.llm_model.reset_stop_flag()
+        self.view.set_stop_enabled(True)
+
+        self.llm_controller.override_text_with_streaming(
+            query=query,
+            system_prompt=state["system_prompt"],
+            stream_callback=self.view.stream_override_text,
+            completion_callback=completion_callback,
+            set_stop_enabled_callback=self.view.set_stop_enabled,
+        )

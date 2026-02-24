@@ -1,12 +1,13 @@
 """Custom Qt widgets for the application."""
+
 from pathlib import Path
 import shutil
-from PyQt5 import QtWidgets, QtCore
+from PyQt5 import QtWidgets, QtCore, QtGui
 
 
 class FileTreeWidget(QtWidgets.QTreeWidget):
     """Custom tree widget that moves files in the filesystem when dragged."""
-    
+
     def dropEvent(self, event):
         """Handle drop event to move files in the filesystem."""
         # Get the item being dragged
@@ -14,21 +15,21 @@ class FileTreeWidget(QtWidgets.QTreeWidget):
         if not dragged_items:
             super().dropEvent(event)
             return
-        
+
         dragged_item = dragged_items[0]
         source_path = dragged_item.data(0, QtCore.Qt.UserRole)
-        
+
         if not source_path:
             super().dropEvent(event)
             return
-        
+
         # Get the drop target
         drop_indicator = self.dropIndicatorPosition()
         target_item = self.itemAt(event.pos())
-        
+
         # Determine the destination directory
         dest_dir = None
-        
+
         if target_item:
             target_path = target_item.data(0, QtCore.Qt.UserRole)
             if target_path:
@@ -39,27 +40,27 @@ class FileTreeWidget(QtWidgets.QTreeWidget):
                 else:
                     # If dropping on a file, move to its parent directory
                     dest_dir = target_path_obj.parent
-        
+
         # If no valid target or dropping at root level
         if dest_dir is None:
             # Get the root directory (supplemental or system_prompts)
             source_path_obj = Path(source_path)
-            if 'supplemental' in str(source_path_obj):
-                dest_dir = Path('supplemental')
-            elif 'system_prompts' in str(source_path_obj):
-                dest_dir = Path('system_prompts')
+            if "supplemental" in str(source_path_obj):
+                dest_dir = Path("supplemental")
+            elif "system_prompts" in str(source_path_obj):
+                dest_dir = Path("system_prompts")
             else:
                 super().dropEvent(event)
                 return
-        
+
         source_path_obj = Path(source_path)
         dest_path = dest_dir / source_path_obj.name
-        
+
         # Don't move if source and destination are the same
         if source_path_obj.parent == dest_dir:
             super().dropEvent(event)
             return
-        
+
         # Move the file/directory in the filesystem
         try:
             shutil.move(str(source_path_obj), str(dest_path))
@@ -68,9 +69,7 @@ class FileTreeWidget(QtWidgets.QTreeWidget):
             super().dropEvent(event)
         except Exception as e:
             QtWidgets.QMessageBox.critical(
-                self,
-                "Move Failed",
-                f"Failed to move '{source_path_obj.name}':\n{str(e)}"
+                self, "Move Failed", f"Failed to move '{source_path_obj.name}':\n{str(e)}"
             )
 
 
@@ -79,6 +78,7 @@ class AutoGrowTextEdit(QtWidgets.QTextEdit):
     while Shift+Enter inserts a newline.
     Emits send_signal when Enter (without Shift) is pressed.
     """
+
     send_signal = QtCore.pyqtSignal()
 
     def __init__(self, min_lines=1, max_lines=10, *args, **kwargs):
@@ -118,3 +118,213 @@ class AutoGrowTextEdit(QtWidgets.QTextEdit):
             self.send_signal.emit()
             return
         super().keyPressEvent(event)
+
+
+class OutlineSectionRow(QtWidgets.QWidget):
+    """A single row in the OutlineTrackerWidget representing one outline section."""
+
+    redo_clicked = QtCore.pyqtSignal()
+
+    _STATUS_ICONS = {
+        "pending": "[ ]",
+        "active": "[▶]",
+        "done": "[✓]",
+    }
+    _STATUS_LABEL_COLORS = {
+        "pending": "#666666",
+        "active": "#4a9eff",
+        "done": "#4eff9e",
+    }
+    _STATUS_TITLE_COLORS = {
+        "pending": "#888888",
+        "active": "#e0e0e0",
+        "done": "#cccccc",
+    }
+
+    def __init__(self, index: int, title: str, details: str, status: str = "pending", parent=None):
+        super().__init__(parent)
+        self._status = status
+        self._init_ui(title, details)
+
+    def _init_ui(self, title: str, details: str):
+        layout = QtWidgets.QHBoxLayout(self)
+        layout.setContentsMargins(6, 4, 6, 4)
+        layout.setSpacing(6)
+
+        # Status icon
+        self._status_label = QtWidgets.QLabel(self._STATUS_ICONS.get(self._status, "[ ]"))
+        self._status_label.setFixedWidth(28)
+        self._status_label.setAlignment(QtCore.Qt.AlignTop | QtCore.Qt.AlignLeft)
+        font = self._status_label.font()
+        font.setFamily("monospace")
+        self._status_label.setFont(font)
+        layout.addWidget(self._status_label)
+
+        # Text column (title + optional details)
+        text_layout = QtWidgets.QVBoxLayout()
+        text_layout.setContentsMargins(0, 0, 0, 0)
+        text_layout.setSpacing(1)
+
+        self._title_label = QtWidgets.QLabel(title)
+        self._title_label.setWordWrap(True)
+        title_font = self._title_label.font()
+        title_font.setBold(True)
+        self._title_label.setFont(title_font)
+        text_layout.addWidget(self._title_label)
+
+        if details:
+            self._details_label = QtWidgets.QLabel(details)
+            self._details_label.setWordWrap(True)
+            self._details_label.setStyleSheet("color: #777777; font-size: 11px;")
+            text_layout.addWidget(self._details_label)
+        else:
+            self._details_label = None
+
+        layout.addLayout(text_layout, stretch=1)
+
+        # Redo button (only visible for completed sections)
+        self._redo_button = QtWidgets.QPushButton("↺")
+        self._redo_button.setFixedSize(24, 24)
+        self._redo_button.setFlat(True)
+        self._redo_button.setToolTip("Rewrite this section")
+        self._redo_button.setCursor(QtCore.Qt.PointingHandCursor)
+        self._redo_button.setStyleSheet(
+            "QPushButton { color: #aaaaaa; border: 1px solid #555; border-radius: 3px; }"
+            "QPushButton:hover { color: #ffffff; border-color: #888; }"
+        )
+        self._redo_button.clicked.connect(self.redo_clicked)
+        self._redo_button.setVisible(self._status in ("done", "active"))
+        layout.addWidget(self._redo_button)
+
+        self._apply_colors()
+
+    def _apply_colors(self):
+        label_color = self._STATUS_LABEL_COLORS.get(self._status, "#666666")
+        title_color = self._STATUS_TITLE_COLORS.get(self._status, "#888888")
+        self._status_label.setStyleSheet(f"color: {label_color}; font-family: monospace;")
+        self._title_label.setStyleSheet(f"color: {title_color};")
+
+    def set_status(self, status: str):
+        """Update the row's visual status."""
+        self._status = status
+        self._status_label.setText(self._STATUS_ICONS.get(status, "[ ]"))
+        self._redo_button.setVisible(status in ("done", "active"))
+        self._apply_colors()
+
+
+class OutlineTrackerWidget(QtWidgets.QWidget):
+    """Displays the story outline as an interactive checklist during writing.
+
+    Each section shows its current status (pending / active / done) and a redo
+    button for completed sections.  Emits ``redo_requested(index)`` when the user
+    clicks the ↺ button on a completed row.
+    """
+
+    redo_requested = QtCore.pyqtSignal(int)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._sections: list = []  # list of dicts: {title, details, status}
+        self._row_widgets: list = []  # parallel list of OutlineSectionRow
+        self._init_ui()
+
+    def _init_ui(self):
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.setContentsMargins(0, 2, 0, 2)
+        layout.setSpacing(2)
+
+        header = QtWidgets.QLabel("📋 Writing Progress")
+        header.setStyleSheet("color: #aaaaaa; font-size: 11px; padding: 0 6px;")
+        layout.addWidget(header)
+
+        self._list = QtWidgets.QListWidget()
+        self._list.setSelectionMode(QtWidgets.QAbstractItemView.NoSelection)
+        self._list.setFocusPolicy(QtCore.Qt.NoFocus)
+        self._list.setMaximumHeight(210)
+        self._list.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
+        self._list.setStyleSheet(
+            "QListWidget {"
+            "  background: #1e1e1e;"
+            "  border: 1px solid #333;"
+            "  border-radius: 4px;"
+            "}"
+            "QListWidget::item {"
+            "  border-bottom: 1px solid #2a2a2a;"
+            "  padding: 0;"
+            "}"
+        )
+        layout.addWidget(self._list)
+
+    # ── Public API ─────────────────────────────────────────────────────────────
+
+    def set_sections(self, sections: list):
+        """Populate tracker from a list of section dicts.
+
+        Args:
+            sections: List of dicts with 'description', 'details', 'completed' keys.
+        """
+        self._sections = [
+            {
+                "title": s.get("description", ""),
+                "details": s.get("details", "") or "",
+                "status": "done" if s.get("completed") else "pending",
+            }
+            for s in sections
+        ]
+        self._rebuild()
+
+    def set_active(self, index: int):
+        """Mark a section as currently being written."""
+        for i, sec in enumerate(self._sections):
+            if sec["status"] == "active":
+                sec["status"] = "pending"
+                if i < len(self._row_widgets):
+                    self._row_widgets[i].set_status("pending")
+        if 0 <= index < len(self._sections):
+            self._sections[index]["status"] = "active"
+            if index < len(self._row_widgets):
+                self._row_widgets[index].set_status("active")
+                self._list.scrollToItem(self._list.item(index))
+
+    def mark_complete(self, index: int):
+        """Mark a section as fully written."""
+        if 0 <= index < len(self._sections):
+            self._sections[index]["status"] = "done"
+            if index < len(self._row_widgets):
+                self._row_widgets[index].set_status("done")
+
+    def reset(self):
+        """Reset all sections to pending state."""
+        for sec in self._sections:
+            sec["status"] = "pending"
+        for row in self._row_widgets:
+            row.set_status("pending")
+
+    def reset_from(self, index: int):
+        """Reset all sections from *index* onward to pending, then set index as active.
+
+        Args:
+            index: The section index to mark as active; all sections at or after
+                   this index are reset to pending first.
+        """
+        for i in range(index, len(self._sections)):
+            self._sections[i]["status"] = "pending"
+            if i < len(self._row_widgets):
+                self._row_widgets[i].set_status("pending")
+        self.set_active(index)
+
+    def section_count(self) -> int:
+        return len(self._sections)
+
+    # ── Private ────────────────────────────────────────────────────────────────
+
+    def _rebuild(self):
+        self._list.clear()
+        self._row_widgets = []
+        for i, sec in enumerate(self._sections):
+            row = OutlineSectionRow(i, sec["title"], sec["details"], sec["status"])
+            row.redo_clicked.connect(lambda _checked=False, idx=i: self.redo_requested.emit(idx))
+            item = QtWidgets.QListWidgetItem(self._list)
+            item.setSizeHint(row.sizeHint())
+            self._list.setItemWidget(item, row)
+            self._row_widgets.append(row)

@@ -5,6 +5,11 @@ Main entry point for the application.
 Run this file to start the story builder application.
 """
 
+import os
+
+# Suppress BAML / Rust tracing output before any baml-py code is imported.
+os.environ.setdefault("BAML_LOG", "off")
+
 import sys
 from PyQt5 import QtWidgets, QtCore, QtGui
 
@@ -18,9 +23,7 @@ class SplashScreen(QtWidgets.QSplashScreen):
         pixmap.fill(QtGui.QColor(45, 45, 45))
 
         super().__init__(pixmap)
-        self.setWindowFlags(
-            QtCore.Qt.WindowStaysOnTopHint | QtCore.Qt.FramelessWindowHint
-        )
+        self.setWindowFlags(QtCore.Qt.WindowStaysOnTopHint | QtCore.Qt.FramelessWindowHint)
 
         # Draw text on the pixmap
         painter = QtGui.QPainter(pixmap)
@@ -83,9 +86,7 @@ def main_with_splash():
 
     # Import heavy dependencies with progress updates
     try:
-        splash.update_message(
-            "Loading language models...\n(This may take a moment on first run)"
-        )
+        splash.update_message("Loading language models...\n(This may take a moment on first run)")
         from controllers.main_controller import main
 
         splash.update_message("Starting application...")

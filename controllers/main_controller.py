@@ -93,6 +93,9 @@ class MainController:
         # Track markdown content for rendering
         self._markdown_content = ""
 
+        # Track whether an accept/reject cycle is from a section redo
+        self._redo_section_index: int | None = None
+
         # Connect view signals to handlers
         self._connect_signals()
 
@@ -161,6 +164,10 @@ class MainController:
         self.view.update_accepted.connect(self._on_update_accepted)
         self.view.update_rejected.connect(self._on_update_rejected)
         self.view.llm_panel.start_writing_requested.connect(self._on_start_writing_from_planning)
+        self.view.llm_panel.continue_writing_requested.connect(
+            self.planning_controller.resume_writing
+        )
+        self.view.llm_panel.redo_section_requested.connect(self._on_redo_section)
 
     def _connect_observers(self):
         """Connect model observers to update view."""
@@ -1354,24 +1361,56 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
 
     def _on_update_complete(self):
         """Handle completion of text update operation."""
-        # Finalize the update (show accept/reject UI)
         self.view.finish_text_update()
         self.view.set_waiting(False)
-        # Note: Story model will be updated when user accepts the change
+
+    def _on_redo_complete(self):
+        """Handle completion of a section-redo LLM stream — show accept/reject UI."""
+        self.view.finish_text_update()
+        self.view.set_waiting(False)
 
     def _on_update_accepted(self):
         """Handle user accepting the override."""
-        # Update story model with new content
         new_story = self.view.get_story_content()
         self._markdown_content = new_story
         self.story_model.content = new_story
 
+        if self._redo_section_index is not None:
+            idx = self._redo_section_index
+            self._redo_section_index = None
+
+            # Update end position for this section
+            self.planning_controller._section_end_positions[idx] = len(new_story)
+
+            # Invalidate start/end positions for all later sections (they shifted)
+            for later in list(self.planning_controller._section_start_positions.keys()):
+                if later > idx:
+                    self.planning_controller._section_start_positions.pop(later, None)
+                    self.planning_controller._section_end_positions.pop(later, None)
+
+            # Reset tracker from the next section onward
+            state = self.planning_model.build_state
+            next_idx = idx + 1
+            if state:
+                state["current_task_index"] = next_idx
+                state["task_chunk_count"] = 0
+            self.view.llm_panel.outline_tracker.mark_complete(idx)
+            if state and next_idx < len(state.get("original_tasks", [])):
+                self.view.llm_panel.outline_tracker.reset_from(next_idx)
+
+            # Re-enable the Continue button so the user can proceed
+            self.view.llm_panel.set_section_writing(False)
+
     def _on_update_rejected(self):
         """Handle user rejecting the override."""
-        # Story text already restored by view, just sync model
         restored_story = self.view.get_story_content()
         self._markdown_content = restored_story
         self.story_model.content = restored_story
+
+        if self._redo_section_index is not None:
+            self._redo_section_index = None
+            # Old text already restored by the reject handler; just re-enable Continue
+            self.view.llm_panel.set_section_writing(False)
 
     def _on_update_summary_requested(self):
         """Handle request to regenerate story summary after user edits.
@@ -1875,9 +1914,6 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
             or "Let's plan your story! Describe what you'd like to write about."
         )
         self.view.llm_panel.display_planning_welcome(welcome_text)
-        self.view.llm_panel.append_llm_panel_text(
-            '*When ready, type "Start Writing" to begin story generation.*\n\n'
-        )
 
     def _on_start_writing_from_planning(self, outline):
         """Handle start writing request from planning mode.
@@ -1902,14 +1938,58 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
         supp_text = self.view.utilities_panel.gather_supplemental_text()
         system_prompt = self.view.utilities_panel.get_system_prompt_text()
 
-        # Disable planning mode in panel (keep conversation visible)
-        self.view.llm_panel.set_planning_mode(False)
-
-        # Switch mode selector back to Write
-        self.view.llm_panel.set_mode("Write")
+        # Stay in planning mode — don't switch modes or disable planning conversation
 
         # Start outline-driven generation
         self.planning_controller.start_outline_build(outline, notes, supp_text, system_prompt)
+
+    def _on_redo_section(self, section_index: int):
+        """Handle a request to rewrite a completed outline section using the diff overlay.
+
+        Uses the same red→green accept/reject mechanism as 'Update Selected Text'.
+
+        Args:
+            section_index: Zero-based index of the section to rewrite.
+        """
+        start = self.planning_controller._section_start_positions.get(section_index)
+        if start is None:
+            self.view.show_warning(
+                "Cannot Rewrite",
+                f"Position data for section {section_index + 1} is not available. "
+                "This section may not have been written in the current session.",
+            )
+            return
+
+        # end may be None for a section that was stopped mid-way;
+        # fall back to current story length (end of any partial text)
+        end = self.planning_controller._section_end_positions.get(
+            section_index, len(self.view.get_story_content())
+        )
+
+        task_name = ""
+        build_state = self.planning_model.build_state
+        if build_state and section_index < len(build_state.get("original_tasks", [])):
+            task = build_state["original_tasks"][section_index]
+            task_name = f'\n\n"{task[:80]}{"..." if len(task) > 80 else ""}"'
+
+        reply = QtWidgets.QMessageBox.question(
+            self.view,
+            "Rewrite Section",
+            f"Rewrite section {section_index + 1}?{task_name}\n\n"
+            "The new text will be shown alongside the original so you can accept or reject it.",
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+            QtWidgets.QMessageBox.No,
+        )
+        if reply != QtWidgets.QMessageBox.Yes:
+            return
+
+        self.story_model.save_to_history()
+        self._redo_section_index = section_index
+
+        # Mark the old section text red and position cursor for green streaming
+        self.view.start_text_update(start, end)
+
+        self.planning_controller.rewrite_section_with_diff(section_index, self._on_redo_complete)
 
     def show(self):
         """Show the main view."""
