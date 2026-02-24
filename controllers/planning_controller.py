@@ -641,32 +641,71 @@ class PlanningController(QtCore.QObject):
         """
         current_task = state["original_tasks"][state["current_task_index"]]
 
-        # Calculate dynamic RAG token budget
-        context_limit = self.settings_model.context_limit
-        output_reserve = 2000
-        story_tokens = self.story_model.estimate_token_count(story_for_llm)
-        outline_tokens = self.story_model.estimate_token_count(state["outline"])
-        system_tokens = self.story_model.estimate_token_count(state["system_prompt"])
+        # ── Token budget ──────────────────────────────────────────────────────
+        # Account for ALL components that end up in the final prompt:
+        #   SystemMessage  → system_prompt
+        #   HumanMessage   → outline + story + task + upcoming + rag + notes + supp + instructions
+        # A fixed overhead covers the task description, upcoming items, and
+        # instruction boilerplate (conservatively estimated at 200 tokens).
+        QUERY_OVERHEAD_TOKENS: int = 200
 
-        available_for_rag_and_story = (
-            context_limit - story_tokens - outline_tokens - system_tokens - output_reserve
+        context_limit: int = self.settings_model.context_limit
+        output_reserve: int = 2000
+
+        story_tokens: int = self.story_model.estimate_token_count(story_for_llm)
+        outline_tokens: int = self.story_model.estimate_token_count(state["outline"])
+        system_tokens: int = self.story_model.estimate_token_count(state["system_prompt"])
+        notes_tokens: int = self.story_model.estimate_token_count(state["notes"])
+        supp_tokens: int = self.story_model.estimate_token_count(state["supp_text"])
+
+        # Warn loudly if the system prompt alone exceeds the context window —
+        # llama.cpp will refuse the request entirely in that case.
+        if system_tokens >= context_limit:
+            self.view.append_logs(
+                f"\n⚠️  WARNING: System prompt ({system_tokens} tokens) exceeds the "
+                f"context limit ({context_limit} tokens). The request will likely fail. "
+                "Consider shortening your system prompt.\n\n"
+            )
+
+        fixed_costs: int = (
+            system_tokens
+            + outline_tokens
+            + story_tokens
+            + notes_tokens
+            + supp_tokens
+            + QUERY_OVERHEAD_TOKENS
+            + output_reserve
         )
-        # Use 25% for RAG in outline-driven mode (similar to auto-build)
-        max_rag_tokens = int(available_for_rag_and_story * 0.25)
-        max_rag_tokens = max(500, min(max_rag_tokens, 3000))
+        available_for_rag: int = context_limit - fixed_costs
+
+        # Only allocate RAG tokens when there is genuine headroom; never force a
+        # minimum that would push the total over the context limit.
+        if available_for_rag > 0:
+            max_rag_tokens: int = min(int(available_for_rag * 0.25), 3000)
+        else:
+            max_rag_tokens = 0
 
         # Query RAG
-        self.view.append_logs(
-            f"🔍 Querying knowledge bases (budget: {max_rag_tokens:,} tokens)...\n"
-        )
-        rag_context = self.rag_controller.query_databases(current_task, max_tokens=max_rag_tokens)
+        if max_rag_tokens > 0:
+            self.view.append_logs(
+                f"🔍 Querying knowledge bases (budget: {max_rag_tokens:,} tokens)...\n"
+            )
+            rag_context = self.rag_controller.query_databases(
+                current_task, max_tokens=max_rag_tokens
+            )
+        else:
+            self.view.append_logs(
+                "⚠️  Skipping RAG — no token headroom left after context components.\n"
+            )
+            rag_context = None
         state["last_rag_context"] = rag_context
 
         if rag_context:
             rag_tokens = self.story_model.estimate_token_count(rag_context)
             self.view.append_logs(f"  ✓ Retrieved {rag_tokens} tokens of context\n")
         else:
-            self.view.append_logs("  • No additional context found\n")
+            if max_rag_tokens > 0:
+                self.view.append_logs("  • No additional context found\n")
 
         # Build query
         query = self._build_chunk_query(state, story_for_llm, current_task, rag_context)
@@ -972,14 +1011,30 @@ class PlanningController(QtCore.QObject):
         state["task_chunk_count"] = 0
         current_task = state["original_tasks"][section_index]
 
-        # Re-query RAG for fresh context
-        context_limit = self.settings_model.context_limit
-        outline_tokens = self.story_model.estimate_token_count(state["outline"])
-        system_tokens = self.story_model.estimate_token_count(state["system_prompt"])
-        story_tokens = self.story_model.estimate_token_count(story_up_to_section)
-        available = context_limit - story_tokens - outline_tokens - system_tokens - 2000
-        max_rag_tokens = max(500, min(int(available * 0.25), 3000))
-        rag_context = self.rag_controller.query_databases(current_task, max_tokens=max_rag_tokens)
+        # Re-query RAG for fresh context, accounting for all prompt components.
+        QUERY_OVERHEAD_TOKENS: int = 200
+        context_limit: int = self.settings_model.context_limit
+        outline_tokens: int = self.story_model.estimate_token_count(state["outline"])
+        system_tokens: int = self.story_model.estimate_token_count(state["system_prompt"])
+        story_tokens: int = self.story_model.estimate_token_count(story_up_to_section)
+        notes_tokens: int = self.story_model.estimate_token_count(state["notes"])
+        supp_tokens: int = self.story_model.estimate_token_count(state["supp_text"])
+        fixed_costs: int = (
+            system_tokens
+            + outline_tokens
+            + story_tokens
+            + notes_tokens
+            + supp_tokens
+            + QUERY_OVERHEAD_TOKENS
+            + 2000  # output reserve
+        )
+        available: int = context_limit - fixed_costs
+        max_rag_tokens: int = min(int(available * 0.25), 3000) if available > 0 else 0
+        rag_context = (
+            self.rag_controller.query_databases(current_task, max_tokens=max_rag_tokens)
+            if max_rag_tokens > 0
+            else None
+        )
         state["last_rag_context"] = rag_context
 
         query = self._build_chunk_query(state, story_up_to_section, current_task, rag_context)
