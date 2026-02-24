@@ -168,6 +168,7 @@ class MainController:
             self.planning_controller.resume_writing
         )
         self.view.llm_panel.redo_section_requested.connect(self._on_redo_section)
+        self.view.llm_panel.uncheck_section_requested.connect(self._on_uncheck_section)
 
     def _connect_observers(self):
         """Connect model observers to update view."""
@@ -1988,6 +1989,40 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
 
         # Mark the old section text red and position cursor for green streaming
         self.view.start_text_update(start, end)
+
+    def _on_uncheck_section(self, section_index: int) -> None:
+        """Handle a request to un-check a completed outline section.
+
+        Resets the tracker display from *section_index* onward to pending and,
+        when a build state is available, rewinds it so the user can click
+        ▶ Continue to resume writing from that section.
+
+        Args:
+            section_index: Zero-based index of the section to un-check.
+        """
+        # Reset tracker visuals from the selected section onward
+        self.view.llm_panel.outline_tracker.reset_from(section_index)
+
+        # Update build state if a build is in progress or was paused
+        build_state: dict | None = self.planning_model.build_state
+        if build_state:
+            build_state["current_task_index"] = section_index
+            build_state["task_chunk_count"] = 0
+            # Rebuild remaining tasks from the rewound position
+            build_state["remaining_tasks"] = build_state["original_tasks"][section_index:].copy()
+
+            # Re-enable the Continue button so the user can resume from this section
+            self.view.llm_panel.set_section_writing(False)
+
+            # Log the action so the user knows what happened
+            task_label: str = ""
+            if section_index < len(build_state["original_tasks"]):
+                task: str = build_state["original_tasks"][section_index]
+                task_label = f' "{task[:60]}{"..." if len(task) > 60 else ""}"'
+            self.view.append_logs(
+                f"\n◻ Section {section_index + 1}{task_label} marked as not yet written. "
+                "Click ▶ Continue to resume writing from this section.\n"
+            )
 
         self.planning_controller.rewrite_section_with_diff(section_index, self._on_redo_complete)
 

@@ -25,6 +25,9 @@ class LLMPanel(QtWidgets.QWidget):
         QtCore.pyqtSignal()
     )  # Emits when Continue is clicked between sections
     redo_section_requested = QtCore.pyqtSignal(int)  # Emits section index when ↺ is clicked
+    uncheck_section_requested = QtCore.pyqtSignal(
+        int
+    )  # Emits section index when [✓] is clicked to un-check
     outline_changed = QtCore.pyqtSignal(str)  # Emits when outline is edited
 
     def __init__(self):
@@ -94,6 +97,7 @@ class LLMPanel(QtWidgets.QWidget):
         self.outline_tracker = OutlineTrackerWidget()
         self.outline_tracker.hide()
         self.outline_tracker.redo_requested.connect(self.redo_section_requested)
+        self.outline_tracker.uncheck_requested.connect(self.uncheck_section_requested)
         layout.addWidget(self.outline_tracker)
 
         # Writing bar: Start Writing / Continue button + chunks-per-section spinbox

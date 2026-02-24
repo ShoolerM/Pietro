@@ -124,6 +124,8 @@ class OutlineSectionRow(QtWidgets.QWidget):
     """A single row in the OutlineTrackerWidget representing one outline section."""
 
     redo_clicked = QtCore.pyqtSignal()
+    # Emitted when the user clicks the [✓] icon on a completed section to un-check it
+    uncheck_clicked = QtCore.pyqtSignal()
 
     _STATUS_ICONS = {
         "pending": "[ ]",
@@ -151,13 +153,15 @@ class OutlineSectionRow(QtWidgets.QWidget):
         layout.setContentsMargins(6, 4, 6, 4)
         layout.setSpacing(6)
 
-        # Status icon
-        self._status_label = QtWidgets.QLabel(self._STATUS_ICONS.get(self._status, "[ ]"))
+        # Status icon – displayed as a flat QPushButton so it becomes clickable
+        # when the section is done, letting the user un-check it back to pending.
+        self._status_label = QtWidgets.QPushButton(self._STATUS_ICONS.get(self._status, "[ ]"))
         self._status_label.setFixedWidth(28)
-        self._status_label.setAlignment(QtCore.Qt.AlignTop | QtCore.Qt.AlignLeft)
+        self._status_label.setFlat(True)
         font = self._status_label.font()
         font.setFamily("monospace")
         self._status_label.setFont(font)
+        self._status_label.clicked.connect(self._on_status_clicked)
         layout.addWidget(self._status_label)
 
         # Text column (title + optional details)
@@ -198,13 +202,34 @@ class OutlineSectionRow(QtWidgets.QWidget):
 
         self._apply_colors()
 
-    def _apply_colors(self):
-        label_color = self._STATUS_LABEL_COLORS.get(self._status, "#666666")
-        title_color = self._STATUS_TITLE_COLORS.get(self._status, "#888888")
-        self._status_label.setStyleSheet(f"color: {label_color}; font-family: monospace;")
+    def _apply_colors(self) -> None:
+        label_color: str = self._STATUS_LABEL_COLORS.get(self._status, "#666666")
+        title_color: str = self._STATUS_TITLE_COLORS.get(self._status, "#888888")
+
+        # Base button style – mimics a plain label (no border, transparent background)
+        base_style: str = (
+            f"QPushButton {{ color: {label_color}; font-family: monospace; border: none;"
+            f" background: transparent; text-align: left; padding: 0; }}"
+        )
+
+        if self._status == "done":
+            # Add red hover tint to signal that clicking will un-check the section
+            self._status_label.setStyleSheet(base_style + "QPushButton:hover { color: #ff8888; }")
+            self._status_label.setCursor(QtCore.Qt.PointingHandCursor)
+            self._status_label.setToolTip("Click to mark as not yet written")
+        else:
+            self._status_label.setStyleSheet(base_style)
+            self._status_label.setCursor(QtCore.Qt.ArrowCursor)
+            self._status_label.setToolTip("")
+
         self._title_label.setStyleSheet(f"color: {title_color};")
 
-    def set_status(self, status: str):
+    def _on_status_clicked(self) -> None:
+        """Emit uncheck_clicked when the [✓] icon is clicked on a completed section."""
+        if self._status == "done":
+            self.uncheck_clicked.emit()
+
+    def set_status(self, status: str) -> None:
         """Update the row's visual status."""
         self._status = status
         self._status_label.setText(self._STATUS_ICONS.get(status, "[ ]"))
@@ -221,6 +246,8 @@ class OutlineTrackerWidget(QtWidgets.QWidget):
     """
 
     redo_requested = QtCore.pyqtSignal(int)
+    # Emitted when the user un-checks a completed section; carries the section index
+    uncheck_requested = QtCore.pyqtSignal(int)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -324,6 +351,7 @@ class OutlineTrackerWidget(QtWidgets.QWidget):
         for i, sec in enumerate(self._sections):
             row = OutlineSectionRow(i, sec["title"], sec["details"], sec["status"])
             row.redo_clicked.connect(lambda _checked=False, idx=i: self.redo_requested.emit(idx))
+            row.uncheck_clicked.connect(lambda idx=i: self.uncheck_requested.emit(idx))
             item = QtWidgets.QListWidgetItem(self._list)
             item.setSizeHint(row.sizeHint())
             self._list.setItemWidget(item, row)
