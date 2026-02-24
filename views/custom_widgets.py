@@ -120,12 +120,29 @@ class AutoGrowTextEdit(QtWidgets.QTextEdit):
         super().keyPressEvent(event)
 
 
+# Stylesheet for the section-edit dialog
+_EDIT_DIALOG_STYLE: str = (
+    "QDialog { background: #1e1e1e; }"
+    "QLabel { color: #cccccc; }"
+    "QLineEdit { background: #2d2d2d; color: #e0e0e0; border: 1px solid #555;"
+    "  border-radius: 3px; padding: 4px; }"
+    "QTextEdit { background: #2d2d2d; color: #e0e0e0; border: 1px solid #555;"
+    "  border-radius: 3px; padding: 4px; }"
+    "QPushButton { background: #3a3a3a; color: #cccccc; border: 1px solid #555;"
+    "  border-radius: 3px; padding: 4px 12px; }"
+    "QPushButton:hover { background: #4a4a4a; border-color: #888; }"
+    "QPushButton:pressed { background: #555; }"
+)
+
+
 class OutlineSectionRow(QtWidgets.QWidget):
     """A single row in the OutlineTrackerWidget representing one outline section."""
 
     redo_clicked = QtCore.pyqtSignal()
     # Emitted when the user clicks the [✓] icon on a completed section to un-check it
     uncheck_clicked = QtCore.pyqtSignal()
+    # Emitted when the user edits the section title/details; carries (new_title, new_details)
+    section_edited = QtCore.pyqtSignal(str, str)
 
     _STATUS_ICONS = {
         "pending": "[ ]",
@@ -148,7 +165,7 @@ class OutlineSectionRow(QtWidgets.QWidget):
         self._status = status
         self._init_ui(title, details)
 
-    def _init_ui(self, title: str, details: str):
+    def _init_ui(self, title: str, details: str) -> None:
         layout = QtWidgets.QHBoxLayout(self)
         layout.setContentsMargins(6, 4, 6, 4)
         layout.setSpacing(6)
@@ -164,29 +181,43 @@ class OutlineSectionRow(QtWidgets.QWidget):
         self._status_label.clicked.connect(self._on_status_clicked)
         layout.addWidget(self._status_label)
 
-        # Text column (title + optional details)
-        text_layout = QtWidgets.QVBoxLayout()
-        text_layout.setContentsMargins(0, 0, 0, 0)
-        text_layout.setSpacing(1)
+        # Text column (title + details). Details label is always created but
+        # hidden when empty, so update_content can show/hide it cleanly.
+        self._text_layout = QtWidgets.QVBoxLayout()
+        self._text_layout.setContentsMargins(0, 0, 0, 0)
+        self._text_layout.setSpacing(1)
 
         self._title_label = QtWidgets.QLabel(title)
         self._title_label.setWordWrap(True)
         title_font = self._title_label.font()
         title_font.setBold(True)
         self._title_label.setFont(title_font)
-        text_layout.addWidget(self._title_label)
+        self._text_layout.addWidget(self._title_label)
 
-        if details:
-            self._details_label = QtWidgets.QLabel(details)
-            self._details_label.setWordWrap(True)
-            self._details_label.setStyleSheet("color: #777777; font-size: 11px;")
-            text_layout.addWidget(self._details_label)
-        else:
-            self._details_label = None
+        # Always create the details label; hide it when there is no detail text
+        self._details_label = QtWidgets.QLabel(details or "")
+        self._details_label.setWordWrap(True)
+        self._details_label.setStyleSheet("color: #777777; font-size: 11px;")
+        self._text_layout.addWidget(self._details_label)
+        if not details:
+            self._details_label.hide()
 
-        layout.addLayout(text_layout, stretch=1)
+        layout.addLayout(self._text_layout, stretch=1)
 
-        # Redo button (only visible for completed sections)
+        # Edit button – always visible, lets the user modify section title/details
+        self._edit_button = QtWidgets.QPushButton("✏")
+        self._edit_button.setFixedSize(24, 24)
+        self._edit_button.setFlat(True)
+        self._edit_button.setToolTip("Edit this section")
+        self._edit_button.setCursor(QtCore.Qt.PointingHandCursor)
+        self._edit_button.setStyleSheet(
+            "QPushButton { color: #777777; border: 1px solid #444; border-radius: 3px; }"
+            "QPushButton:hover { color: #cccccc; border-color: #888; }"
+        )
+        self._edit_button.clicked.connect(self._on_edit_clicked)
+        layout.addWidget(self._edit_button)
+
+        # Redo button (only visible for completed/active sections)
         self._redo_button = QtWidgets.QPushButton("↺")
         self._redo_button.setFixedSize(24, 24)
         self._redo_button.setFlat(True)
@@ -229,6 +260,66 @@ class OutlineSectionRow(QtWidgets.QWidget):
         if self._status == "done":
             self.uncheck_clicked.emit()
 
+    def _on_edit_clicked(self) -> None:
+        """Open a modal dialog to let the user edit the section title and details."""
+        dialog = QtWidgets.QDialog(self)
+        dialog.setWindowTitle("Edit Section")
+        dialog.setMinimumWidth(420)
+        dialog.setStyleSheet(_EDIT_DIALOG_STYLE)
+
+        dialog_layout = QtWidgets.QVBoxLayout(dialog)
+        dialog_layout.setSpacing(8)
+        dialog_layout.setContentsMargins(12, 12, 12, 12)
+
+        # Title field
+        title_label = QtWidgets.QLabel("Title:")
+        dialog_layout.addWidget(title_label)
+        title_edit = QtWidgets.QLineEdit(self._title_label.text())
+        dialog_layout.addWidget(title_edit)
+
+        # Details field
+        details_label = QtWidgets.QLabel("Details:")
+        dialog_layout.addWidget(details_label)
+        details_edit = QtWidgets.QTextEdit()
+        details_edit.setPlainText(
+            self._details_label.text() if self._details_label.isVisible() else ""
+        )
+        details_edit.setFixedHeight(90)
+        details_edit.setAcceptRichText(False)
+        dialog_layout.addWidget(details_edit)
+
+        # OK / Cancel buttons
+        button_box = QtWidgets.QDialogButtonBox(
+            QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel
+        )
+        button_box.accepted.connect(dialog.accept)
+        button_box.rejected.connect(dialog.reject)
+        dialog_layout.addWidget(button_box)
+
+        if dialog.exec_() == QtWidgets.QDialog.Accepted:
+            new_title: str = title_edit.text().strip()
+            new_details: str = details_edit.toPlainText().strip()
+            # Require a non-empty title before accepting the edit
+            if new_title:
+                self.update_content(new_title, new_details)
+                self.section_edited.emit(new_title, new_details)
+
+    def update_content(self, title: str, details: str) -> None:
+        """Update the display labels with new title and details text.
+
+        Args:
+            title: New section title (must be non-empty).
+            details: New section detail text; hides the details label when empty.
+        """
+        self._title_label.setText(title)
+        if details:
+            self._details_label.setText(details)
+            self._details_label.show()
+        else:
+            self._details_label.hide()
+        # Let the layout recalculate the preferred size for this widget
+        self.updateGeometry()
+
     def set_status(self, status: str) -> None:
         """Update the row's visual status."""
         self._status = status
@@ -248,6 +339,8 @@ class OutlineTrackerWidget(QtWidgets.QWidget):
     redo_requested = QtCore.pyqtSignal(int)
     # Emitted when the user un-checks a completed section; carries the section index
     uncheck_requested = QtCore.pyqtSignal(int)
+    # Emitted when the user edits a section's title/details; carries (index, title, details)
+    section_edited = QtCore.pyqtSignal(int, str, str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -352,7 +445,43 @@ class OutlineTrackerWidget(QtWidgets.QWidget):
             row = OutlineSectionRow(i, sec["title"], sec["details"], sec["status"])
             row.redo_clicked.connect(lambda _checked=False, idx=i: self.redo_requested.emit(idx))
             row.uncheck_clicked.connect(lambda idx=i: self.uncheck_requested.emit(idx))
+            # Wire section edit signal to internal handler so we can update _sections data
+            row.section_edited.connect(
+                lambda title, details, idx=i: self._on_row_edited(idx, title, details)
+            )
             item = QtWidgets.QListWidgetItem(self._list)
             item.setSizeHint(row.sizeHint())
             self._list.setItemWidget(item, row)
             self._row_widgets.append(row)
+
+    def get_sections(self) -> list:
+        """Return a copy of the current sections list.
+
+        Returns:
+            List of dicts with 'title', 'details', and 'status' keys.
+        """
+        return [dict(sec) for sec in self._sections]
+
+    def _on_row_edited(self, index: int, title: str, details: str) -> None:
+        """Update internal section data when a row is edited and propagate the signal.
+
+        Also refreshes the QListWidgetItem size hint so the row resizes correctly.
+
+        Args:
+            index: Zero-based index of the edited section.
+            title: New section title.
+            details: New section details.
+        """
+        # Update internal sections data to keep it in sync with the UI
+        if 0 <= index < len(self._sections):
+            self._sections[index]["title"] = title
+            self._sections[index]["details"] = details
+
+        # Refresh the list item's size hint after the row content changed
+        if index < self._list.count():
+            item = self._list.item(index)
+            row_widget = self._row_widgets[index]
+            item.setSizeHint(row_widget.sizeHint())
+
+        # Bubble the edit event up to the LLMPanel
+        self.section_edited.emit(index, title, details)

@@ -169,6 +169,7 @@ class MainController:
         )
         self.view.llm_panel.redo_section_requested.connect(self._on_redo_section)
         self.view.llm_panel.uncheck_section_requested.connect(self._on_uncheck_section)
+        self.view.llm_panel.outline_changed.connect(self._on_outline_changed)
 
     def _connect_observers(self):
         """Connect model observers to update view."""
@@ -1915,6 +1916,25 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
             or "Let's plan your story! Describe what you'd like to write about."
         )
         self.view.llm_panel.display_planning_welcome(welcome_text)
+
+    def _on_outline_changed(self, outline: str) -> None:
+        """Handle the outline being manually edited by the user via the outline tracker.
+
+        Keeps the planning model and story model in sync with the hand-edited outline
+        so that 'Start Writing' / 'Continue' use the updated section text.
+
+        Args:
+            outline: Updated outline text in markdown checklist format.
+        """
+        # Keep both models in sync with the user's manual edits
+        self.planning_model.current_outline = outline
+        self.story_model.planning_outline = outline
+
+        # Persist the updated outline alongside the current conversation
+        self.settings_model.save_planning_conversation(
+            self.view.llm_panel.get_planning_conversation(),
+            outline,
+        )
 
     def _on_start_writing_from_planning(self, outline):
         """Handle start writing request from planning mode.

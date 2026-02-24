@@ -98,6 +98,8 @@ class LLMPanel(QtWidgets.QWidget):
         self.outline_tracker.hide()
         self.outline_tracker.redo_requested.connect(self.redo_section_requested)
         self.outline_tracker.uncheck_requested.connect(self.uncheck_section_requested)
+        # Connect section edits so the stored outline is kept up to date
+        self.outline_tracker.section_edited.connect(self._on_outline_section_edited)
         layout.addWidget(self.outline_tracker)
 
         # Writing bar: Start Writing / Continue button + chunks-per-section spinbox
@@ -978,6 +980,38 @@ class LLMPanel(QtWidgets.QWidget):
         self._start_writing_button.setText("▶ Start Writing")
         self._start_writing_button.setEnabled(True)
         self._writing_bar.show()
+
+    def _rebuild_outline_markdown(self) -> str:
+        """Reconstruct the markdown checklist outline from the current tracker sections.
+
+        Returns:
+            Markdown string where each section is a checklist item with optional details.
+        """
+        lines: list[str] = []
+        for sec in self.outline_tracker.get_sections():
+            # Use [x] for completed sections, [ ] for all others
+            checkbox: str = "[x]" if sec["status"] == "done" else "[ ]"
+            lines.append(f"- {checkbox} **{sec['title']}**")
+            if sec.get("details"):
+                lines.append(f"  {sec['details']}")
+        return "\n".join(lines)
+
+    @QtCore.pyqtSlot(int, str, str)
+    def _on_outline_section_edited(self, index: int, title: str, details: str) -> None:
+        """Handle a section being edited in the outline tracker.
+
+        Rebuilds the markdown outline from the updated tracker data, stores it as
+        the current outline, and emits outline_changed so the controller can persist
+        the change.
+
+        Args:
+            index: Zero-based index of the edited section (unused directly).
+            title: New section title.
+            details: New section details.
+        """
+        new_outline: str = self._rebuild_outline_markdown()
+        self._current_outline = new_outline
+        self.outline_changed.emit(new_outline)
 
     @QtCore.pyqtSlot(str)
     def set_outline_sections_json(self, sections_json: str):
