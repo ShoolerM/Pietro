@@ -9,3 +9,4 @@ sentence-transformers
 faiss-cpu
 numpy
 python-docx
+pypdf

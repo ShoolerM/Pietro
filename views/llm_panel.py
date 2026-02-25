@@ -434,7 +434,7 @@ class LLMPanel(QtWidgets.QWidget):
                 QtWidgets.QMessageBox.warning(
                     self,
                     "Unsupported File",
-                    "Only image files (png/jpg/jpeg) can be dropped here.",
+                    "Only image files (png/jpg/jpeg) and PDFs can be dropped here.",
                 )
                 event.acceptProposedAction()
             else:
@@ -538,7 +538,7 @@ class LLMPanel(QtWidgets.QWidget):
             self,
             "Attach Files",
             "",
-            "Text/Docs/Images (*.txt *.md *.json *.yaml *.yml *.csv *.docx *.png *.jpg *.jpeg);;All Files (*.*)",
+            "Text/Docs/Images (*.txt *.md *.json *.yaml *.yml *.csv *.docx *.pdf *.png *.jpg *.jpeg);;All Files (*.*)",
         )
         if not file_paths:
             return
@@ -602,9 +602,10 @@ class LLMPanel(QtWidgets.QWidget):
                     paths.append(path)
         return paths
 
-    def _is_supported_drop_image(self, path):
+    def _is_supported_drop_image(self, path: str) -> bool:
+        """Return True if the path is a file type supported by the drop zone."""
         lower = path.lower()
-        return lower.endswith((".png", ".jpg", ".jpeg"))
+        return lower.endswith((".png", ".jpg", ".jpeg", ".pdf"))
 
     def _is_supported_attachment(self, path):
         lower = path.lower()
@@ -616,6 +617,7 @@ class LLMPanel(QtWidgets.QWidget):
                 ".jpg",
                 ".jpeg",
                 ".docx",
+                ".pdf",
             )
         ):
             return True

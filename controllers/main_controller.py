@@ -217,6 +217,7 @@ class MainController:
         text_exts = {".txt", ".md", ".json", ".yaml", ".yml", ".csv"}
         image_exts = {".png", ".jpg", ".jpeg"}
         docx_ext = ".docx"
+        pdf_ext = ".pdf"
         disallowed = {".gif", ".mp4", ".mov", ".avi", ".mkv", ".webm"}
         max_text_chars = 20000
         max_image_bytes = 5 * 1024 * 1024
@@ -264,6 +265,17 @@ class MainController:
                         docx_module = importlib.import_module("docx")
                         doc = docx_module.Document(str(file_path))
                         text = "\n".join(p.text for p in doc.paragraphs if p.text)
+                    except Exception:
+                        text = ""
+                elif ext == pdf_ext:
+                    # Extract text from all pages of the PDF using pypdf
+                    try:
+                        import importlib
+
+                        pypdf_module = importlib.import_module("pypdf")
+                        reader = pypdf_module.PdfReader(str(file_path))
+                        page_texts = [page.extract_text() or "" for page in reader.pages]
+                        text = "\n".join(t for t in page_texts if t.strip())
                     except Exception:
                         text = ""
                 elif ext in text_exts:
