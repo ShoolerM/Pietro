@@ -329,8 +329,10 @@ class PlanningController(QtCore.QObject):
             System message content with full context
         """
         # Get existing story content and notes
+        # Read notes directly from the UI panel — story_model.notes is never
+        # populated from the panel and would always be empty here.
         existing_story = self.story_model.content
-        existing_notes = self.story_model.notes
+        existing_notes = self.view.notes_panel.get_notes_text()
 
         # Extract story context using summarization
         story_context = ""
@@ -432,6 +434,9 @@ class PlanningController(QtCore.QObject):
             "original_tasks": tasks.copy(),
             "remaining_tasks": tasks.copy(),
             "notes": notes,
+            # Preserve the user's original notes immutably so auto-generated
+            # scene notes never silently replace what the author wrote.
+            "user_notes": notes,
             "supp_text": supp_text,
             "system_prompt": system_prompt,
             "current_task_index": 0,
@@ -1009,7 +1014,16 @@ class PlanningController(QtCore.QObject):
     def _continue_after_notes(self, generated_notes: str = None):
         """Continue planning build after notes generation."""
         if generated_notes is not None and self.planning_model.build_state:
-            self.planning_model.build_state["notes"] = generated_notes
+            # Always prepend the user's original notes so they are never lost
+            # when the auto-notes feature overwrites the notes field with a
+            # rolling story summary.
+            user_notes: str = self.planning_model.build_state.get("user_notes", "")
+            if user_notes:
+                self.planning_model.build_state["notes"] = (
+                    f"{user_notes}\n\n--- AUTO-GENERATED SCENE NOTES ---\n{generated_notes}"
+                )
+            else:
+                self.planning_model.build_state["notes"] = generated_notes
 
         self.view.set_waiting(False)
 
