@@ -31,16 +31,39 @@ class SummarizationSignals(QtCore.QObject):
     set_waiting_signal = QtCore.pyqtSignal(bool)
 
 
-class QtStreamingCallbackHandler(StreamingStdOutCallbackHandler):
+class StoppableStreamHandler(StreamingStdOutCallbackHandler):
+    """Base class for all LLM streaming handlers.
+
+    Holds a direct reference to LLMModel and exposes ``should_stop`` /
+    ``_check_stop()``.  Every streaming handler in the app should subclass
+    this so that Escape-to-stop support is guaranteed automatically — no
+    lambdas or manual flag checks scattered across thread functions.
+    """
+
+    def __init__(self, llm_model):
+        super().__init__()
+        self._llm_model = llm_model
+
+    @property
+    def should_stop(self) -> bool:
+        """Return True if the user has requested generation to stop."""
+        return self._llm_model.stop_generation
+
+    def _check_stop(self) -> None:
+        """Raise KeyboardInterrupt if a stop has been requested."""
+        if self.should_stop:
+            raise KeyboardInterrupt("Generation stopped by user")
+
+
+class QtStreamingCallbackHandler(StoppableStreamHandler):
     """Custom callback handler that streams LLM output to a Qt signal.
     Filters out thinking blocks between <think> and </think> tags.
     Thinking content is sent to a separate signal.
     """
 
-    def __init__(self, signals, stop_check=None, paragraph_limit=None):
-        super().__init__()
+    def __init__(self, signals, llm_model, paragraph_limit=None):
+        super().__init__(llm_model)
         self.signals = signals
-        self.stop_check = stop_check
         self.buffer = ""
         self.in_thinking_block = False
         self.paragraph_limit = paragraph_limit
@@ -52,17 +75,9 @@ class QtStreamingCallbackHandler(StreamingStdOutCallbackHandler):
         Filters out content between <think> and </think> tags.
         """
         # Check for stop request - MUST be checked first
-        if self.stop_check:
-            try:
-                is_stopped = self.stop_check()
-                if is_stopped:
-                    # Signal to stop and raise immediately
-                    self.signals.thinking_signal.emit("\n[Stop requested - will interrupt LLM]\n")
-                    raise KeyboardInterrupt("Generation stopped by user")
-            except KeyboardInterrupt:
-                raise
-            except Exception:
-                pass
+        if self.should_stop:
+            self.signals.thinking_signal.emit("\n[Stop requested - will interrupt LLM]\n")
+            raise KeyboardInterrupt("Generation stopped by user")
 
         self.buffer += token
 
@@ -101,8 +116,7 @@ class QtStreamingCallbackHandler(StreamingStdOutCallbackHandler):
                     self._check_paragraph_limit()
 
         # Extra stop check after each token processing
-        if self.stop_check and self.stop_check():
-            raise KeyboardInterrupt("Generation stopped by user")
+        self._check_stop()
 
     def _check_paragraph_limit(self):
         """Check if we've reached the paragraph limit and stop if so."""
@@ -110,8 +124,7 @@ class QtStreamingCallbackHandler(StreamingStdOutCallbackHandler):
             return
 
         # Also check for stop request while checking paragraph limit
-        if self.stop_check and self.stop_check():
-            raise KeyboardInterrupt("Generation stopped by user")
+        self._check_stop()
 
         # Count paragraphs (double newlines)
         self.paragraph_count = self.accumulated_text.count("\n\n")
@@ -129,6 +142,79 @@ class QtStreamingCallbackHandler(StreamingStdOutCallbackHandler):
                 self.accumulated_text += self.buffer
         self.buffer = ""
         self.in_thinking_block = False
+
+
+class SimpleStreamingHandler(StoppableStreamHandler):
+    """Lightweight streaming handler that forwards tokens directly to a Qt signal.
+
+    Used for text-override (inline rewrite) mode where thinking-block
+    filtering is not needed.
+    """
+
+    def __init__(self, llm_model, text_signal):
+        super().__init__(llm_model)
+        self.text_signal = text_signal
+        self.buffer = ""
+
+    def on_llm_new_token(self, token: str, **kwargs) -> None:
+        self._check_stop()
+        # Buffer tokens and emit in small batches for smooth streaming
+        self.buffer += token
+        if len(self.buffer) >= 5:
+            self.text_signal.emit(self.buffer)
+            self.buffer = ""
+
+    def on_llm_end(self, *args, **kwargs) -> None:
+        if self.buffer:
+            self.text_signal.emit(self.buffer)
+            self.buffer = ""
+
+
+class NotesStreamingHandler(StoppableStreamHandler):
+    """Streaming handler for notes generation.
+
+    Filters thinking blocks and forwards non-thinking text both to an
+    optional chunk callback and to the ``generated_text`` accumulator.
+    After ``.invoke()`` completes, read ``handler.generated_text`` for the
+    full result.
+    """
+
+    def __init__(self, llm_model, on_chunk_callback=None):
+        super().__init__(llm_model)
+        self._on_chunk_callback = on_chunk_callback
+        self.generated_text = ""
+        self._in_thinking_block = False
+        self._buffer = ""
+
+    def on_llm_new_token(self, token: str, **kwargs) -> None:
+        self._check_stop()
+        self._buffer += token
+
+        if "<think>" in self._buffer:
+            before_think = self._buffer.split("<think>")[0]
+            if before_think and not self._in_thinking_block:
+                self._emit(before_think)
+            self._in_thinking_block = True
+            self._buffer = self._buffer.split("<think>", 1)[1]
+
+        if "</think>" in self._buffer and self._in_thinking_block:
+            self._in_thinking_block = False
+            self._buffer = self._buffer.split("</think>", 1)[1]
+
+        if not self._in_thinking_block and len(self._buffer) > 10:
+            to_emit = self._buffer[:-10]
+            self._buffer = self._buffer[-10:]
+            self._emit(to_emit)
+
+    def on_llm_end(self, *args, **kwargs) -> None:
+        if not self._in_thinking_block and self._buffer:
+            self._emit(self._buffer)
+        self._buffer = ""
+
+    def _emit(self, text: str) -> None:
+        self.generated_text += text
+        if self._on_chunk_callback:
+            self._on_chunk_callback(text)
 
 
 class LLMController:
@@ -233,9 +319,7 @@ class LLMController:
             signals: StreamingSignals object created in main thread
         """
         try:
-            streaming_handler = QtStreamingCallbackHandler(
-                signals, lambda: self.llm_model.stop_generation
-            )
+            streaming_handler = QtStreamingCallbackHandler(signals, self.llm_model)
 
             model_name = self.llm_model.current_model
             can_see_images = is_vision_model(model_name)
@@ -341,33 +425,7 @@ class LLMController:
             signals: Signal object for thread-safe communication
         """
         try:
-            # Create a simple streaming handler that just emits tokens
-            class SimpleStreamingHandler(StreamingStdOutCallbackHandler):
-                def __init__(self, text_signal, stop_check):
-                    super().__init__()
-                    self.text_signal = text_signal
-                    self.stop_check = stop_check
-                    self.buffer = ""
-
-                def on_llm_new_token(self, token: str, **kwargs) -> None:
-                    if self.stop_check and self.stop_check():
-                        raise KeyboardInterrupt("Generation stopped by user")
-
-                    # Buffer tokens and emit in small batches for smooth streaming
-                    self.buffer += token
-                    if len(self.buffer) >= 5:  # Emit every 5 characters
-                        self.text_signal.emit(self.buffer)
-                        self.buffer = ""
-
-                def on_llm_end(self, *args, **kwargs) -> None:
-                    # Emit remaining buffer
-                    if self.buffer:
-                        self.text_signal.emit(self.buffer)
-                        self.buffer = ""
-
-            streaming_handler = SimpleStreamingHandler(
-                signals.text_signal, lambda: self.llm_model.stop_generation
-            )
+            streaming_handler = SimpleStreamingHandler(self.llm_model, signals.text_signal)
 
             # Invoke LLM with streaming
             if system_prompt:
@@ -640,78 +698,49 @@ class LLMController:
             tuple: (generated_notes, estimated_tokens)
         """
         try:
-            # Build the generation prompt
             generation_prompt = (
                 f"{notes_prompt_template}\n\nSTORY CONTEXT:\n{story_context}\n\nGENERATED NOTES:"
             )
 
             model_name = getattr(self.llm, "model_name", None)
 
-            # Create LLM with streaming enabled if callback provided
             llm_for_notes = ChatOpenAI(
                 base_url=self.llm_model.base_url,
                 api_key=self.llm_model.api_key or "not-needed",
                 model=model_name if model_name else "default",
                 streaming=bool(on_chunk_callback),
-                temperature=0.5,  # Slightly creative but focused
+                temperature=0.5,
             )
-
-            generated_notes = ""
-            in_thinking_block = False
 
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
 
                 if on_chunk_callback:
-                    # Use streaming with thinking block filtering
-                    for chunk in llm_for_notes.stream([HumanMessage(content=generation_prompt)]):
-                        if hasattr(chunk, "content"):
-                            text = chunk.content
-                        elif hasattr(chunk, "text"):
-                            text = chunk.text
-                        else:
-                            text = str(chunk)
-
-                        if text:
-                            # Filter out thinking blocks from notes
-                            if "<think>" in text:
-                                before_think = text.split("<think>")[0]
-                                if before_think:
-                                    generated_notes += before_think
-                                    on_chunk_callback(before_think)
-                                in_thinking_block = True
-                                text = text.split("<think>", 1)[1] if "<think>" in text else ""
-
-                            if "</think>" in text and in_thinking_block:
-                                after_think = (
-                                    text.split("</think>", 1)[1] if "</think>" in text else ""
-                                )
-                                in_thinking_block = False
-                                text = after_think
-
-                            if not in_thinking_block and text:
-                                generated_notes += text
-                                on_chunk_callback(text)
+                    # Use NotesStreamingHandler so stop-check is automatic and
+                    # thinking-block filtering is handled in one place.
+                    handler = NotesStreamingHandler(self.llm_model, on_chunk_callback)
+                    llm_for_notes.invoke(
+                        [HumanMessage(content=generation_prompt)],
+                        config={"callbacks": [handler]},
+                    )
+                    generated_notes = handler.generated_text
                 else:
-                    # Non-streaming
                     response = llm_for_notes.invoke([HumanMessage(content=generation_prompt)])
-                    if hasattr(response, "content"):
-                        generated_notes = response.content
-                    elif hasattr(response, "text"):
-                        generated_notes = response.text
-                    else:
-                        generated_notes = str(response)
+                    generated_notes = (
+                        response.content if hasattr(response, "content") else str(response)
+                    )
 
             if not isinstance(generated_notes, str):
                 generated_notes = str(generated_notes)
 
             tokens = StoryModel.estimate_token_count(generated_notes)
-
             return generated_notes, tokens
 
+        except KeyboardInterrupt:
+            # Stop was requested mid-generation — return whatever was accumulated.
+            return "", 0
         except Exception as e:
             print(f"⚠ Error generating notes: {e}")
-            # Return empty notes on error
             return "", 0
 
     def summarize_chunk(self, chunk_text: str, append_thinking_callback) -> tuple[str, int]:
@@ -1071,9 +1100,7 @@ class LLMController:
         """
         try:
             streaming_handler = QtStreamingCallbackHandler(
-                signals,
-                lambda: self.llm_model.stop_generation,
-                paragraph_limit=paragraph_limit,
+                signals, self.llm_model, paragraph_limit=paragraph_limit
             )
 
             if system_prompt:

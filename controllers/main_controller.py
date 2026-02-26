@@ -401,6 +401,18 @@ class MainController:
 
     def _handle_notes_ready(self, generated_notes, notes_tokens):
         """Handle notes completion and continue pending flows."""
+        # If the user pressed stop during notes generation, abort all pending flows
+        if self.llm_model.stop_generation:
+            for attr in (
+                "_pending_notes_context",
+                "_pending_auto_build_context",
+                "_pending_planning_build_context",
+            ):
+                if hasattr(self, attr):
+                    delattr(self, attr)
+            self.view.set_waiting(False)
+            return
+
         if hasattr(self, "_pending_notes_context"):
             ctx = self._pending_notes_context
             delattr(self, "_pending_notes_context")

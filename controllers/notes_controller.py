@@ -146,6 +146,10 @@ class NotesController:
                 generated_notes, notes_tokens = self.llm_controller.generate_notes(
                     story_context, notes_prompt, stream_chunk
                 )
+                # If stop was requested during generation, do not proceed
+                if self.llm_controller.llm_model.stop_generation:
+                    signals.notes_error.emit("[Generation stopped by user]")
+                    return
                 signals.notes_ready.emit(generated_notes, notes_tokens)
             except Exception as e:
                 signals.notes_error.emit(str(e))
