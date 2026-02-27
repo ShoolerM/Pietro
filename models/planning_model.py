@@ -6,6 +6,7 @@ Manages story planning state, outline structure, and conversation history.
 from typing import List, Optional, Dict, Any
 from pydantic import BaseModel, Field
 from base.observable import Observable
+import re
 
 
 class OutlinePlotPoint(BaseModel):
@@ -208,7 +209,6 @@ class PlanningModel(Observable):
         tasks = []
         for line in outline_text.strip().split("\n"):
             # Strip leading whitespace but preserve the line structure
-            original_line = line
             line = line.lstrip()
 
             # Look for unchecked markdown checkboxes (handle nested items with indentation)
@@ -233,6 +233,54 @@ class PlanningModel(Observable):
                 if task:
                     tasks.append(task)
         return tasks
+
+    @staticmethod
+    def parse_outline_to_sections(outline_text: str) -> List[Dict[str, Any]]:
+        """Parse a markdown checklist outline into a list of section dicts.
+
+        Handles the format produced by the app:
+            - [ ] **Title**
+              Optional details
+            - [x] **Completed Title**
+              Its details
+
+        Args:
+            outline_text: Markdown checklist string.
+
+        Returns:
+            List of dicts with 'description', 'details', and 'completed' keys.
+        """
+        sections: List[Dict[str, Any]] = []
+        current: Optional[Dict[str, Any]] = None
+
+        for line in outline_text.split("\n"):
+            stripped: str = line.strip()
+            # Match a checklist item (checked or unchecked)
+            if stripped.startswith("- [ ]") or stripped.startswith("- [x]"):
+                # Save the previous section before starting a new one
+                if current is not None:
+                    sections.append(current)
+
+                completed: bool = stripped.startswith("- [x]")
+                raw_title: str = stripped[5:].strip()
+
+                # Strip surrounding ** bold markers if present, e.g. **Title**
+                title_match = re.match(r"\*\*(.+?)\*\*", raw_title)
+                title: str = title_match.group(1).strip() if title_match else raw_title
+
+                current = {"description": title, "details": "", "completed": completed}
+            elif stripped and current is not None:
+                # Indented detail line belonging to the current section
+                if current["details"]:
+                    current["details"] += "\n" + stripped
+                else:
+                    current["details"] = stripped
+
+        # Append the final section if one is in progress
+        if current is not None:
+            sections.append(current)
+
+        return sections
 
     def reset_build_state(self):
         """Reset build state to None."""

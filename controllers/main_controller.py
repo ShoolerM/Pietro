@@ -1,6 +1,7 @@
 """Main controller that coordinates all components."""
 
 import sys
+import json
 import base64
 import mimetypes
 import threading
@@ -93,9 +94,6 @@ class MainController:
         # Track markdown content for rendering
         self._markdown_content = ""
 
-        # Track whether an accept/reject cycle is from a section redo
-        self._redo_section_index: int | None = None
-
         # Connect view signals to handlers
         self._connect_signals()
 
@@ -130,6 +128,8 @@ class MainController:
         self.view.rag_database_browse_requested.connect(self._on_rag_database_browse)
         self.view.rag_delete_database_clicked.connect(self.rag_controller.delete_database)
         self.view.rag_max_chunks_changed.connect(self.rag_model.set_max_chunks)
+        # Also handle max-chunks changes from the Story Mode bar in the LLM panel
+        self.view.story_max_chunks_changed.connect(self.rag_model.set_max_chunks)
         self.view.rag_summary_chunk_size_changed.connect(self.rag_model.set_summary_chunk_size)
         self.view.rag_score_threshold_changed.connect(self.rag_model.set_score_variance_threshold)
         self.view.rag_filename_boost_enabled_changed.connect(
@@ -171,7 +171,6 @@ class MainController:
         self.view.llm_panel.continue_writing_requested.connect(
             self.planning_controller.resume_writing
         )
-        self.view.llm_panel.redo_section_requested.connect(self._on_redo_section)
         self.view.llm_panel.uncheck_section_requested.connect(self._on_uncheck_section)
         self.view.llm_panel.check_section_requested.connect(self._on_check_section)
         self.view.llm_panel.outline_changed.connect(self._on_outline_changed)
@@ -1483,53 +1482,17 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
         self.view.finish_text_update()
         self.view.set_waiting(False)
 
-    def _on_redo_complete(self):
-        """Handle completion of a section-redo LLM stream — show accept/reject UI."""
-        self.view.finish_text_update()
-        self.view.set_waiting(False)
-
     def _on_update_accepted(self):
         """Handle user accepting the override."""
         new_story = self.view.get_story_content()
         self._markdown_content = new_story
         self.story_model.content = new_story
 
-        if self._redo_section_index is not None:
-            idx = self._redo_section_index
-            self._redo_section_index = None
-
-            # Update end position for this section
-            self.planning_controller._section_end_positions[idx] = len(new_story)
-
-            # Invalidate start/end positions for all later sections (they shifted)
-            for later in list(self.planning_controller._section_start_positions.keys()):
-                if later > idx:
-                    self.planning_controller._section_start_positions.pop(later, None)
-                    self.planning_controller._section_end_positions.pop(later, None)
-
-            # Reset tracker from the next section onward
-            state = self.planning_model.build_state
-            next_idx = idx + 1
-            if state:
-                state["current_task_index"] = next_idx
-                state["task_chunk_count"] = 0
-            self.view.llm_panel.outline_tracker.mark_complete(idx)
-            if state and next_idx < len(state.get("original_tasks", [])):
-                self.view.llm_panel.outline_tracker.reset_from(next_idx)
-
-            # Re-enable the Continue button so the user can proceed
-            self.view.llm_panel.set_section_writing(False)
-
     def _on_update_rejected(self):
         """Handle user rejecting the override."""
         restored_story = self.view.get_story_content()
         self._markdown_content = restored_story
         self.story_model.content = restored_story
-
-        if self._redo_section_index is not None:
-            self._redo_section_index = None
-            # Old text already restored by the reject handler; just re-enable Continue
-            self.view.llm_panel.set_section_writing(False)
 
     def _on_update_summary_requested(self):
         """Handle request to regenerate story summary after user edits.
@@ -1611,6 +1574,7 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
         supp_text=None,
         system_prompt=None,
         attachments_text=None,
+        image_payloads=None,
     ):
         """Handle request to automatically build a complete story with iterative RAG and summarization.
 
@@ -1989,6 +1953,8 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
                 self.settings_model.smart_mode = True
                 self.view.set_smart_mode(True)
                 self.view.append_logs("✓ Story Mode enabled (continuous writing with RAG)")
+            # Sync the Max Chunks spinbox in the LLM panel with the current model value
+            self.view.set_story_max_chunks(self.rag_model.max_chunks)
             # Disable planning mode if it was active
             self.view.llm_panel.set_planning_mode(False)
         # If Write mode, disable smart_mode and planning mode
@@ -2016,16 +1982,34 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
 
     def _initialize_planning_mode(self):
         """Initialize planning mode in LLM Panel."""
-        # Enable planning mode in panel
+        # Enable planning mode in panel (also shows the outline tracker)
         self.view.llm_panel.set_planning_mode(True)
 
         # Load saved conversation ONLY for user message history (arrow key navigation)
         saved_conversation = self.settings_model.get_planning_conversation()
-
         if saved_conversation:
             # Extract only user messages for arrow key recall
             user_messages = [msg["content"] for msg in saved_conversation if msg["role"] == "user"]
             self.view.llm_panel.user_message_history = user_messages
+
+        # Restore the current SESSION outline from in-memory state only.
+        # Reading from the settings file would load outlines from previous app
+        # launches, which is undesirable.  planning_model.current_outline is None
+        # at startup, so a fresh launch always produces an empty tracker.
+        # Within the same session, switching away from Planning and back restores
+        # the outline the user was working on.
+        current_outline = self.planning_model.current_outline
+        if current_outline and current_outline.strip():
+            sections = self.planning_model.parse_outline_to_sections(current_outline)
+            if sections:
+                self.view.llm_panel.set_outline_sections_json(json.dumps(sections))
+                self.view.llm_panel.set_current_outline(current_outline)
+            else:
+                # Parsed to nothing — clear stale rows
+                self.view.llm_panel.outline_tracker.set_sections([])
+        else:
+            # No in-session outline — ensure any stale tracker rows are cleared
+            self.view.llm_panel.outline_tracker.set_sections([])
 
         # Always show welcome message (fresh start, don't restore old conversations)
         welcome_text = (
@@ -2046,6 +2030,11 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
         # Keep both models in sync with the user's manual edits
         self.planning_model.current_outline = outline
         self.story_model.planning_outline = outline
+
+        # Keep the active build state's outline string in sync so that the LLM
+        # prompt always reflects the latest section titles and descriptions
+        if self.planning_model.build_state:
+            self.planning_model.build_state["outline"] = outline
 
         # Persist the updated outline alongside the current conversation
         self.settings_model.save_planning_conversation(
@@ -2080,54 +2069,6 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
 
         # Start outline-driven generation
         self.planning_controller.start_outline_build(outline, notes, supp_text, system_prompt)
-
-    def _on_redo_section(self, section_index: int):
-        """Handle a request to rewrite a completed outline section using the diff overlay.
-
-        Uses the same red→green accept/reject mechanism as 'Update Selected Text'.
-
-        Args:
-            section_index: Zero-based index of the section to rewrite.
-        """
-        start = self.planning_controller._section_start_positions.get(section_index)
-        if start is None:
-            self.view.show_warning(
-                "Cannot Rewrite",
-                f"Position data for section {section_index + 1} is not available. "
-                "This section may not have been written in the current session.",
-            )
-            return
-
-        # end may be None for a section that was stopped mid-way;
-        # fall back to current story length (end of any partial text)
-        end = self.planning_controller._section_end_positions.get(
-            section_index, len(self.view.get_story_content())
-        )
-
-        task_name = ""
-        build_state = self.planning_model.build_state
-        if build_state and section_index < len(build_state.get("original_tasks", [])):
-            task = build_state["original_tasks"][section_index]
-            task_name = f'\n\n"{task[:80]}{"..." if len(task) > 80 else ""}"'
-
-        reply = QtWidgets.QMessageBox.question(
-            self.view,
-            "Rewrite Section",
-            f"Rewrite section {section_index + 1}?{task_name}\n\n"
-            "The new text will be shown alongside the original so you can accept or reject it.",
-            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
-            QtWidgets.QMessageBox.No,
-        )
-        if reply != QtWidgets.QMessageBox.Yes:
-            return
-
-        self.story_model.save_to_history()
-        self._redo_section_index = section_index
-
-        # Delegate to the planning controller which sets up the diff UI AND starts the LLM.
-        # _redo_section_index is already set above so _on_update_accepted will tick the
-        # correct checkbox when the user accepts the generated text.
-        self.planning_controller.rewrite_section_with_diff(section_index, self._on_redo_complete)
 
     def _on_uncheck_section(self, section_index: int) -> None:
         """Handle a request to un-check a completed outline section.

@@ -10,6 +10,11 @@ from models.stylesheets import (
 from views.search_widget import SearchWidget
 from views.custom_widgets import AutoGrowTextEdit, OutlineTrackerWidget
 
+# Story Mode bar spinbox bounds and default
+STORY_MAX_CHUNKS_MIN: int = 1
+STORY_MAX_CHUNKS_MAX: int = 50
+STORY_MAX_CHUNKS_DEFAULT: int = 10
+
 
 class LLMPanel(QtWidgets.QWidget):
     """Panel for LLM interaction: thinking process, prompt input, and model controls."""
@@ -25,6 +30,7 @@ class LLMPanel(QtWidgets.QWidget):
         QtCore.pyqtSignal()
     )  # Emits when Continue is clicked between sections
     redo_section_requested = QtCore.pyqtSignal(int)  # Emits section index when ↺ is clicked
+    story_max_chunks_changed = QtCore.pyqtSignal(int)  # max chunks for Story Mode auto-build
     uncheck_section_requested = QtCore.pyqtSignal(
         int
     )  # Emits section index when [✓] is clicked to un-check
@@ -68,8 +74,34 @@ class LLMPanel(QtWidgets.QWidget):
         thinking_container_layout.setContentsMargins(5, 5, 5, 5)
         thinking_container_layout.setSpacing(5)
 
+        # Header row: panel title on the left, outline toggle button on the right.
+        # The toggle button is only visible in planning mode and lets the user
+        # show/hide the outline tracker without leaving planning mode.
+        _header_widget = QtWidgets.QWidget()
+        _header_layout = QtWidgets.QHBoxLayout(_header_widget)
+        _header_layout.setContentsMargins(0, 0, 0, 0)
+        _header_layout.setSpacing(4)
+
         self.thinking_label = QtWidgets.QLabel("LLM Panel")
-        thinking_container_layout.addWidget(self.thinking_label)
+        _header_layout.addWidget(self.thinking_label, stretch=1)
+
+        self._outline_toggle_button = QtWidgets.QPushButton("\U0001f4cb Outline")
+        self._outline_toggle_button.setFixedHeight(20)
+        self._outline_toggle_button.setCheckable(True)
+        self._outline_toggle_button.setChecked(True)
+        self._outline_toggle_button.setCursor(QtCore.Qt.PointingHandCursor)
+        self._outline_toggle_button.setToolTip("Show / hide the outline panel")
+        self._outline_toggle_button.setStyleSheet(
+            "QPushButton { color: #888; background: transparent; border: 1px solid #444;"
+            " border-radius: 3px; padding: 1px 8px; font-size: 10px; }"
+            "QPushButton:hover { color: #bbb; border-color: #777; }"
+            "QPushButton:checked { color: #4a9eff; border-color: #4a9eff; }"
+        )
+        self._outline_toggle_button.hide()  # Shown only while in planning mode
+        self._outline_toggle_button.clicked.connect(self._on_outline_toggle_clicked)
+        _header_layout.addWidget(self._outline_toggle_button)
+
+        thinking_container_layout.addWidget(_header_widget)
 
         self._rag_message_index = None
         self._ai_stream_index = None
@@ -99,11 +131,16 @@ class LLMPanel(QtWidgets.QWidget):
         # Outline tracker (shown while writing in planning mode)
         self.outline_tracker = OutlineTrackerWidget()
         self.outline_tracker.hide()
-        self.outline_tracker.redo_requested.connect(self.redo_section_requested)
         self.outline_tracker.uncheck_requested.connect(self.uncheck_section_requested)
         self.outline_tracker.check_requested.connect(self.check_section_requested)
         # Connect section edits so the stored outline is kept up to date
         self.outline_tracker.section_edited.connect(self._on_outline_section_edited)
+        # Connect section additions so the outline is extended and persisted
+        self.outline_tracker.section_added.connect(self._on_section_added)
+        # Uncheck the toggle button when the tracker hides itself via its own × button
+        self.outline_tracker.closed.connect(self._on_tracker_closed)
+        # Rebuild outline when a section is deleted
+        self.outline_tracker.section_deleted.connect(self._on_section_deleted)
         layout.addWidget(self.outline_tracker)
 
         # Writing bar: Start Writing / Continue button + chunks-per-section spinbox
@@ -136,6 +173,33 @@ class LLMPanel(QtWidgets.QWidget):
 
         self._writing_bar.hide()
         layout.addWidget(self._writing_bar)
+
+        # Story Mode bar: visible when Story Mode is selected from the mode dropdown.
+        # Provides quick access to the Max Chunks setting without opening the RAG panel.
+        self._story_mode_bar = QtWidgets.QWidget()
+        story_bar_layout = QtWidgets.QHBoxLayout(self._story_mode_bar)
+        story_bar_layout.setContentsMargins(5, 4, 5, 4)
+        story_bar_layout.setSpacing(8)
+
+        story_max_chunks_label = QtWidgets.QLabel("Max Chunks:")
+        story_max_chunks_label.setStyleSheet("color: #aaaaaa; font-size: 11px;")
+        story_bar_layout.addWidget(story_max_chunks_label)
+
+        self._story_max_chunks_spinbox = QtWidgets.QSpinBox()
+        self._story_max_chunks_spinbox.setRange(STORY_MAX_CHUNKS_MIN, STORY_MAX_CHUNKS_MAX)
+        self._story_max_chunks_spinbox.setValue(STORY_MAX_CHUNKS_DEFAULT)
+        self._story_max_chunks_spinbox.setFixedWidth(52)
+        self._story_max_chunks_spinbox.setToolTip(
+            "Number of LLM generation passes to run in Story Mode auto-build"
+        )
+        self._story_max_chunks_spinbox.valueChanged.connect(
+            lambda v: self.story_max_chunks_changed.emit(v)
+        )
+        story_bar_layout.addWidget(self._story_max_chunks_spinbox)
+        story_bar_layout.addStretch()
+
+        self._story_mode_bar.hide()
+        layout.addWidget(self._story_mode_bar)
 
         # Progress bar (between thinking text and input field)
         self.wait_progress = QtWidgets.QProgressBar()
@@ -213,7 +277,7 @@ class LLMPanel(QtWidgets.QWidget):
             "Story Mode: Continuous writing with RAG (N chunks)"
             "Write: Story continuation mode\n"
         )
-        self.mode_combo.currentTextChanged.connect(lambda text: self.mode_changed.emit(text))
+        self.mode_combo.currentTextChanged.connect(self._on_mode_combo_changed)
         control_layout.addWidget(self.mode_combo)
 
         # Model dropdown (no label)
@@ -670,7 +734,26 @@ class LLMPanel(QtWidgets.QWidget):
         """Get currently selected mode."""
         return self.mode_combo.currentText()
 
-    def set_mode(self, mode):
+    def _on_mode_combo_changed(self, mode: str) -> None:
+        """Handle mode combo box changes, updating Story Mode bar visibility and emitting signal.
+
+        Args:
+            mode: The newly selected mode string
+        """
+        # Show or hide the story mode bar based on the new mode
+        self._update_story_mode_bar_visibility(mode)
+        # Forward to the public signal consumed by the controller
+        self.mode_changed.emit(mode)
+
+    def _update_story_mode_bar_visibility(self, mode: str) -> None:
+        """Show the Story Mode bar only when Story Mode is active.
+
+        Args:
+            mode: Currently active mode string
+        """
+        self._story_mode_bar.setVisible(mode == "Story Mode")
+
+    def set_mode(self, mode: str) -> None:
         """Set the current mode.
 
         Args:
@@ -681,6 +764,18 @@ class LLMPanel(QtWidgets.QWidget):
             self.mode_combo.blockSignals(True)
             self.mode_combo.setCurrentIndex(index)
             self.mode_combo.blockSignals(False)
+        # Manually sync bar visibility since signals were blocked
+        self._update_story_mode_bar_visibility(mode)
+
+    def set_story_max_chunks(self, value: int) -> None:
+        """Sync the Story Mode Max Chunks spinbox to reflect the model's current value.
+
+        Args:
+            value: Number of chunks (clamped to spinbox range by Qt)
+        """
+        self._story_max_chunks_spinbox.blockSignals(True)
+        self._story_max_chunks_spinbox.setValue(value)
+        self._story_max_chunks_spinbox.blockSignals(False)
 
     def set_waiting(self, waiting):
         """Show or hide the progress bar.
@@ -848,10 +943,21 @@ class LLMPanel(QtWidgets.QWidget):
             self.thinking_label.setText("📋 Planning Mode")
             self.thinking_label.setStyleSheet(PLANNING_MODE)
             self.thinking_text.setStyleSheet("border: 2px solid #4a7a4a;")
+            # Show the toggle button and ensure the tracker is visible
+            self._outline_toggle_button.show()
+            self._outline_toggle_button.setChecked(True)
+            # Always show the outline tracker when entering planning mode so the
+            # user can see their outline and add sections immediately
+            self.outline_tracker.show()
         else:
             self.thinking_label.setText("LLM Panel")
             self.thinking_label.setStyleSheet("")
             self.thinking_text.setStyleSheet("")
+            # Hide the toggle button, the tracker, and the writing bar when leaving planning mode
+            self._outline_toggle_button.hide()
+            self.outline_tracker.hide()
+            self._writing_bar.hide()
+            self._writing_active = False
 
     def is_planning_mode(self):
         """Check if currently in planning mode."""
@@ -1064,6 +1170,68 @@ class LLMPanel(QtWidgets.QWidget):
         """
         new_outline: str = self._rebuild_outline_markdown()
         self._current_outline = new_outline
+        self.outline_changed.emit(new_outline)
+
+    @QtCore.pyqtSlot(str, str)
+    def _on_section_added(self, title: str, details: str) -> None:
+        """Handle a new section being appended via the outline tracker.
+
+        Rebuilds the markdown outline to include the new section, updates the
+        stored outline, ensures the writing bar is visible, and emits
+        outline_changed so the controller can persist the change.
+
+        Args:
+            title: New section title.
+            details: New section details (may be empty).
+        """
+        # Rebuild the full outline markdown now that the new section row exists
+        new_outline: str = self._rebuild_outline_markdown()
+        self._current_outline = new_outline
+
+        # Show the writing bar so the user can immediately start writing their
+        # manually-composed outline
+        if not self._writing_bar.isVisible():
+            self._writing_active = False
+            self._start_writing_button.setText("\u25b6 Start Writing")
+            self._start_writing_button.setEnabled(True)
+            self._writing_bar.show()
+
+        self.outline_changed.emit(new_outline)
+
+    @QtCore.pyqtSlot()
+    def _on_tracker_closed(self) -> None:
+        """Uncheck the outline toggle button when the tracker hides via its own × button."""
+        self._outline_toggle_button.setChecked(False)
+
+    @QtCore.pyqtSlot(bool)
+    def _on_outline_toggle_clicked(self, checked: bool) -> None:
+        """Show or hide the outline tracker panel based on the toggle button state.
+
+        Args:
+            checked: True means the button is now checked — show the tracker.
+        """
+        if checked:
+            self.outline_tracker.show()
+        else:
+            self.outline_tracker.hide()
+
+    @QtCore.pyqtSlot(int)
+    def _on_section_deleted(self, index: int) -> None:
+        """Handle a section being deleted from the outline tracker.
+
+        Rebuilds the markdown outline without the deleted section, updates the
+        stored outline, hides the writing bar if no sections remain, and emits
+        outline_changed so the controller can persist the change.
+
+        Args:
+            index: Zero-based index of the section that was removed.
+        """
+        new_outline: str = self._rebuild_outline_markdown()
+        self._current_outline = new_outline
+        # If all sections were deleted, hide the writing bar — nothing left to write
+        if not self.outline_tracker.section_count():
+            self._writing_bar.hide()
+            self._writing_active = False
         self.outline_changed.emit(new_outline)
 
     @QtCore.pyqtSlot(str)

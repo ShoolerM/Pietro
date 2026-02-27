@@ -138,13 +138,14 @@ _EDIT_DIALOG_STYLE: str = (
 class OutlineSectionRow(QtWidgets.QWidget):
     """A single row in the OutlineTrackerWidget representing one outline section."""
 
-    redo_clicked = QtCore.pyqtSignal()
     # Emitted when the user clicks the [✓] icon on a completed section to un-check it
     uncheck_clicked = QtCore.pyqtSignal()
     # Emitted when the user clicks [ ] / [▶] on a pending/active section to mark it done
     check_clicked = QtCore.pyqtSignal()
     # Emitted when the user edits the section title/details; carries (new_title, new_details)
     section_edited = QtCore.pyqtSignal(str, str)
+    # Emitted when the user clicks the delete button on this row
+    delete_clicked = QtCore.pyqtSignal()
 
     _STATUS_ICONS = {
         "pending": "[ ]",
@@ -224,19 +225,18 @@ class OutlineSectionRow(QtWidgets.QWidget):
         self._edit_button.clicked.connect(self._on_edit_clicked)
         layout.addWidget(self._edit_button)
 
-        # Redo button (only visible for completed/active sections)
-        self._redo_button = QtWidgets.QPushButton("↺")
-        self._redo_button.setFixedSize(24, 24)
-        self._redo_button.setFlat(True)
-        self._redo_button.setToolTip("Rewrite this section")
-        self._redo_button.setCursor(QtCore.Qt.PointingHandCursor)
-        self._redo_button.setStyleSheet(
-            "QPushButton { color: #aaaaaa; border: 1px solid #555; border-radius: 3px; }"
-            "QPushButton:hover { color: #ffffff; border-color: #888; }"
+        # Delete button — always visible; removes this section from the outline
+        self._delete_button = QtWidgets.QPushButton("\u2715")
+        self._delete_button.setFixedSize(24, 24)
+        self._delete_button.setFlat(True)
+        self._delete_button.setToolTip("Delete this section")
+        self._delete_button.setCursor(QtCore.Qt.PointingHandCursor)
+        self._delete_button.setStyleSheet(
+            "QPushButton { color: #666; border: 1px solid #555; border-radius: 3px; }"
+            "QPushButton:hover { color: #ff8888; border-color: #ff6666; }"
         )
-        self._redo_button.clicked.connect(self.redo_clicked)
-        self._redo_button.setVisible(self._status in ("done", "active"))
-        layout.addWidget(self._redo_button)
+        self._delete_button.clicked.connect(self.delete_clicked)
+        layout.addWidget(self._delete_button)
 
         self._apply_colors()
 
@@ -338,7 +338,6 @@ class OutlineSectionRow(QtWidgets.QWidget):
         """Update the row's visual status."""
         self._status = status
         self._status_label.setText(self._STATUS_ICONS.get(status, "[ ]"))
-        self._redo_button.setVisible(status in ("done", "active"))
         self._apply_colors()
 
     def hasHeightForWidth(self) -> bool:  # noqa: N802
@@ -366,8 +365,7 @@ class OutlineSectionRow(QtWidgets.QWidget):
         fixed_w: int = margins.left() + margins.right()
         fixed_w += 28 + spacing  # status button + gap
         fixed_w += spacing + 24  # gap + edit button
-        if self._redo_button.isVisible():
-            fixed_w += spacing + 24  # gap + redo button
+        fixed_w += spacing + 24  # gap + delete button (always visible)
 
         text_w: int = max(1, width - fixed_w)
 
@@ -395,18 +393,21 @@ class OutlineSectionRow(QtWidgets.QWidget):
 class OutlineTrackerWidget(QtWidgets.QWidget):
     """Displays the story outline as an interactive checklist during writing.
 
-    Each section shows its current status (pending / active / done) and a redo
-    button for completed sections.  Emits ``redo_requested(index)`` when the user
-    clicks the ↺ button on a completed row.
+    Each section shows its current status (pending / active / done).
     """
 
-    redo_requested = QtCore.pyqtSignal(int)
     # Emitted when the user un-checks a completed section; carries the section index
     uncheck_requested = QtCore.pyqtSignal(int)
     # Emitted when the user manually checks a pending/active section; carries the section index
     check_requested = QtCore.pyqtSignal(int)
     # Emitted when the user edits a section's title/details; carries (index, title, details)
     section_edited = QtCore.pyqtSignal(int, str, str)
+    # Emitted when the user adds a brand-new section; carries (title, details)
+    section_added = QtCore.pyqtSignal(str, str)
+    # Emitted when the user deletes a section; carries the original index
+    section_deleted = QtCore.pyqtSignal(int)
+    # Emitted when the user clicks the close button on the tracker header
+    closed = QtCore.pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -419,9 +420,29 @@ class OutlineTrackerWidget(QtWidgets.QWidget):
         layout.setContentsMargins(0, 2, 0, 2)
         layout.setSpacing(2)
 
-        header = QtWidgets.QLabel("📋 Writing Progress")
-        header.setStyleSheet("color: #aaaaaa; font-size: 11px; padding: 0 6px;")
-        layout.addWidget(header)
+        # Header row: title label on the left, close button on the right
+        header_row = QtWidgets.QHBoxLayout()
+        header_row.setContentsMargins(0, 0, 0, 0)
+        header_row.setSpacing(0)
+
+        header_label = QtWidgets.QLabel("📋 Outline")
+        header_label.setStyleSheet("color: #aaaaaa; font-size: 11px; padding: 0 6px;")
+        header_row.addWidget(header_label, stretch=1)
+
+        # Close button lets the user hide the tracker without leaving planning mode
+        self._close_button = QtWidgets.QPushButton("×")
+        self._close_button.setFixedSize(16, 16)
+        self._close_button.setFlat(True)
+        self._close_button.setToolTip("Hide outline")
+        self._close_button.setStyleSheet(
+            "QPushButton { color: #666; border: none; background: transparent; font-size: 14px; }"
+            "QPushButton:hover { color: #aaa; }"
+        )
+        self._close_button.setCursor(QtCore.Qt.PointingHandCursor)
+        self._close_button.clicked.connect(self._on_close_clicked)
+        header_row.addWidget(self._close_button)
+
+        layout.addLayout(header_row)
 
         self._list = QtWidgets.QListWidget()
         self._list.setSelectionMode(QtWidgets.QAbstractItemView.NoSelection)
@@ -445,6 +466,18 @@ class OutlineTrackerWidget(QtWidgets.QWidget):
             "}"
         )
         layout.addWidget(self._list)
+
+        # Button at the bottom of the list so the user can add new sections manually
+        self._add_section_button = QtWidgets.QPushButton("＋ Add Section")
+        self._add_section_button.setCursor(QtCore.Qt.PointingHandCursor)
+        self._add_section_button.setToolTip("Add a new outline section")
+        self._add_section_button.setStyleSheet(
+            "QPushButton { color: #888; background: transparent; border: 1px dashed #444;"
+            " border-radius: 4px; padding: 4px 10px; font-size: 11px; margin: 2px 4px; }"
+            "QPushButton:hover { color: #bbb; border-color: #777; background: #2a2a2a; }"
+        )
+        self._add_section_button.clicked.connect(self._on_add_section_clicked)
+        layout.addWidget(self._add_section_button)
 
     def eventFilter(self, obj: QtCore.QObject, event: QtCore.QEvent) -> bool:
         """Intercept wheel events on the list to scroll one line at a time."""
@@ -554,13 +587,14 @@ class OutlineTrackerWidget(QtWidgets.QWidget):
         self._row_widgets = []
         for i, sec in enumerate(self._sections):
             row = OutlineSectionRow(i, sec["title"], sec["details"], sec["status"])
-            row.redo_clicked.connect(lambda _checked=False, idx=i: self.redo_requested.emit(idx))
             row.uncheck_clicked.connect(lambda idx=i: self.uncheck_requested.emit(idx))
             row.check_clicked.connect(lambda idx=i: self.check_requested.emit(idx))
             # Wire section edit signal to internal handler so we can update _sections data
             row.section_edited.connect(
                 lambda title, details, idx=i: self._on_row_edited(idx, title, details)
             )
+            # Wire delete signal so the section is removed and indices refreshed
+            row.delete_clicked.connect(lambda idx=i: self._on_row_deleted(idx))
             item = QtWidgets.QListWidgetItem(self._list)
             item.setSizeHint(row.sizeHint())
             self._list.setItemWidget(item, row)
@@ -597,3 +631,76 @@ class OutlineTrackerWidget(QtWidgets.QWidget):
 
         # Bubble the edit event up to the LLMPanel
         self.section_edited.emit(index, title, details)
+
+    def _on_close_clicked(self) -> None:
+        """Hide the tracker and emit the closed signal."""
+        self.hide()
+        self.closed.emit()
+
+    def _on_row_deleted(self, index: int) -> None:
+        """Remove a section from the tracker and propagate the deletion.
+
+        After removal the entire widget list is rebuilt so all row-index
+        closures remain correct.
+
+        Args:
+            index: Zero-based index of the section to remove.
+        """
+        if 0 <= index < len(self._sections):
+            self._sections.pop(index)
+        self._rebuild()
+        self.section_deleted.emit(index)
+
+    def _on_add_section_clicked(self) -> None:
+        """Open a dialog so the user can create a new outline section."""
+        dialog = QtWidgets.QDialog(self)
+        dialog.setWindowTitle("Add Section")
+        dialog.setMinimumWidth(420)
+        dialog.setStyleSheet(_EDIT_DIALOG_STYLE)
+
+        dialog_layout = QtWidgets.QVBoxLayout(dialog)
+        dialog_layout.setSpacing(8)
+        dialog_layout.setContentsMargins(12, 12, 12, 12)
+
+        # Title input field
+        title_label = QtWidgets.QLabel("Title:")
+        dialog_layout.addWidget(title_label)
+        title_edit = QtWidgets.QLineEdit()
+        title_edit.setPlaceholderText("Enter section title...")
+        dialog_layout.addWidget(title_edit)
+
+        # Optional details field
+        details_label = QtWidgets.QLabel("Details (optional):")
+        dialog_layout.addWidget(details_label)
+        details_edit = QtWidgets.QTextEdit()
+        details_edit.setPlaceholderText("Enter section description or details...")
+        details_edit.setFixedHeight(90)
+        details_edit.setAcceptRichText(False)
+        dialog_layout.addWidget(details_edit)
+
+        # OK / Cancel buttons
+        button_box = QtWidgets.QDialogButtonBox(
+            QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel
+        )
+        button_box.accepted.connect(dialog.accept)
+        button_box.rejected.connect(dialog.reject)
+        dialog_layout.addWidget(button_box)
+
+        if dialog.exec_() == QtWidgets.QDialog.Accepted:
+            new_title: str = title_edit.text().strip()
+            new_details: str = details_edit.toPlainText().strip()
+            # Require a non-empty title before adding
+            if new_title:
+                self.add_section(new_title, new_details)
+
+    def add_section(self, title: str, details: str) -> None:
+        """Append a new pending section to the tracker and emit section_added.
+
+        Args:
+            title: Non-empty section title.
+            details: Optional section detail text.
+        """
+        # Add the section to internal state and rebuild the widget list
+        self._sections.append({"title": title, "details": details, "status": "pending"})
+        self._rebuild()
+        self.section_added.emit(title, details)

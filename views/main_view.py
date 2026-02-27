@@ -34,6 +34,9 @@ class MainView(QtWidgets.QWidget):
     rag_refresh_clicked = QtCore.pyqtSignal()
     rag_delete_database_clicked = QtCore.pyqtSignal(str)  # database name
     rag_max_chunks_changed = QtCore.pyqtSignal(int)  # max chunks for auto-build
+    story_max_chunks_changed = QtCore.pyqtSignal(
+        int
+    )  # max chunks changed from LLM panel Story Mode bar
     rag_summary_chunk_size_changed = QtCore.pyqtSignal(int)  # max raw tokens for summarization
     rag_score_threshold_changed = QtCore.pyqtSignal(float)  # score variance threshold percentage
     rag_filename_boost_enabled_changed = QtCore.pyqtSignal(bool)  # enable filename boosting
@@ -186,6 +189,7 @@ class MainView(QtWidgets.QWidget):
         self.llm_panel.model_refresh_clicked.connect(self.model_refresh_clicked.emit)
         self.llm_panel.model_changed.connect(self.model_changed.emit)
         self.llm_panel.mode_changed.connect(self._on_mode_changed)
+        self.llm_panel.story_max_chunks_changed.connect(self.story_max_chunks_changed.emit)
 
         # Utilities panel signals
         self.utilities_panel.supplemental_refresh_clicked.connect(
@@ -782,6 +786,14 @@ class MainView(QtWidgets.QWidget):
     def show_warning(self, title, message):
         """Show warning message box."""
         QtWidgets.QMessageBox.warning(self, title, message)
+
+    def set_story_max_chunks(self, value: int) -> None:
+        """Sync the Story Mode Max Chunks spinbox in the LLM panel.
+
+        Args:
+            value: Number of chunks to display in the spinbox
+        """
+        self.llm_panel.set_story_max_chunks(value)
 
     def start_text_update(self, start_pos, end_pos):
         """Initialize streaming text replacement at the given position.
