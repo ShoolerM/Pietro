@@ -10,6 +10,7 @@ class RagPanel(QtWidgets.QWidget):
     create_database_clicked = QtCore.pyqtSignal()
     add_files_clicked = QtCore.pyqtSignal(str)
     database_toggled = QtCore.pyqtSignal(str)
+    database_browse_requested = QtCore.pyqtSignal(str)  # emitted on database double-click
     refresh_clicked = QtCore.pyqtSignal()
     delete_database_clicked = QtCore.pyqtSignal(str)
     max_chunks_changed = QtCore.pyqtSignal(int)
@@ -95,6 +96,10 @@ class RagPanel(QtWidgets.QWidget):
         if user_data and user_data.startswith("add_files:"):
             db_name = user_data.split(":", 1)[1]
             self.add_files_clicked.emit(db_name)
+        elif user_data == "database":
+            # Top-level database item — open the file browser
+            db_name = item.text(0).split(" (")[0]
+            self.database_browse_requested.emit(db_name)
 
     def _on_delete_database_clicked(self):
         checked_databases = []
@@ -159,16 +164,12 @@ class RagPanel(QtWidgets.QWidget):
                     | QtCore.Qt.ItemIsUserCheckable
                     | QtCore.Qt.ItemIsSelectable
                 )
-                db_item.setCheckState(
-                    0, QtCore.Qt.Checked if is_selected else QtCore.Qt.Unchecked
-                )
+                db_item.setCheckState(0, QtCore.Qt.Checked if is_selected else QtCore.Qt.Unchecked)
 
                 add_button_item = QtWidgets.QTreeWidgetItem(["+ Add Files"])
                 add_button_item.setData(0, QtCore.Qt.UserRole, f"add_files:{db_name}")
                 add_button_item.setFlags(
-                    add_button_item.flags()
-                    | QtCore.Qt.ItemIsEnabled
-                    | QtCore.Qt.ItemIsSelectable
+                    add_button_item.flags() | QtCore.Qt.ItemIsEnabled | QtCore.Qt.ItemIsSelectable
                 )
 
                 db_item.addChild(add_button_item)
@@ -213,9 +214,7 @@ class RagPanel(QtWidgets.QWidget):
         max_chunks_spinbox.setMinimum(1)
         max_chunks_spinbox.setMaximum(50)
         max_chunks_spinbox.setValue(current_max_chunks)
-        max_chunks_spinbox.setToolTip(
-            "Number of chunks to generate in auto-build mode (1-50)"
-        )
+        max_chunks_spinbox.setToolTip("Number of chunks to generate in auto-build mode (1-50)")
         max_chunks_input_layout.addWidget(max_chunks_spinbox)
         max_chunks_input_layout.addStretch()
 
@@ -242,9 +241,7 @@ class RagPanel(QtWidgets.QWidget):
         summary_spinbox.setMaximum(200000)
         summary_spinbox.setSingleStep(256)
         summary_spinbox.setValue(current_summary_chunk_size)
-        summary_spinbox.setToolTip(
-            "Max raw tokens kept before summarizing (256-200000)"
-        )
+        summary_spinbox.setToolTip("Max raw tokens kept before summarizing (256-200000)")
         summary_input_layout.addWidget(summary_spinbox)
         summary_input_layout.addStretch()
 
@@ -274,9 +271,7 @@ class RagPanel(QtWidgets.QWidget):
         threshold_spinbox.setDecimals(0)
         threshold_spinbox.setValue(current_score_threshold)
         threshold_spinbox.setSuffix("%")
-        threshold_spinbox.setToolTip(
-            "Score variance threshold for filtering results (5%-30%)"
-        )
+        threshold_spinbox.setToolTip("Score variance threshold for filtering results (5%-30%)")
         threshold_input_layout.addWidget(threshold_spinbox)
         threshold_input_layout.addStretch()
 

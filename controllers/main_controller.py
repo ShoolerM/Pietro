@@ -127,6 +127,7 @@ class MainController:
         self.view.rag_create_database_clicked.connect(self.rag_controller.create_database)
         self.view.rag_add_files_clicked.connect(self.rag_controller.add_files_to_database)
         self.view.rag_database_toggled.connect(self.rag_controller.toggle_database)
+        self.view.rag_database_browse_requested.connect(self._on_rag_database_browse)
         self.view.rag_delete_database_clicked.connect(self.rag_controller.delete_database)
         self.view.rag_max_chunks_changed.connect(self.rag_model.set_max_chunks)
         self.view.rag_summary_chunk_size_changed.connect(self.rag_model.set_summary_chunk_size)
@@ -163,6 +164,9 @@ class MainController:
         )
         self.view.update_accepted.connect(self._on_update_accepted)
         self.view.update_rejected.connect(self._on_update_rejected)
+        # Re-index any RAG-tracked file automatically when it is saved from the
+        # story-panel file editor.
+        self.view.file_saved.connect(self._on_file_saved_check_rag)
         self.view.llm_panel.start_writing_requested.connect(self._on_start_writing_from_planning)
         self.view.llm_panel.continue_writing_requested.connect(
             self.planning_controller.resume_writing
@@ -1246,6 +1250,94 @@ class MainController:
             self.settings_model.smart_mode = new_val
         except Exception:
             pass
+
+    # ------------------------------------------------------------------
+    # RAG file-browser & live re-indexing
+    # ------------------------------------------------------------------
+
+    def _on_rag_database_browse(self, db_name: str) -> None:
+        """Open a searchable file browser for the given RAG database.
+
+        The dialog is non-modal so the user can keep it open while they
+        navigate between open file tabs.  A reference is held on ``self``
+        so Qt does not garbage-collect the dialog while it is visible.
+
+        Args:
+            db_name: Name of the RAG database to browse.
+        """
+        from views.rag_file_browser import RagFileBrowserDialog
+
+        # Retrieve the list of files registered in this database
+        file_paths: list = self.rag_model.get_database_files(db_name)
+
+        if not file_paths:
+            self.view.show_warning(
+                "Empty Database",
+                f"The database '{db_name}' has no files yet.\n"
+                "Use '+ Add Files' (or double-click the child item) to add some.",
+            )
+            return
+
+        # Create the dialog and wire its signal before showing it
+        dialog: RagFileBrowserDialog = RagFileBrowserDialog(db_name, file_paths, self.view)
+        dialog.file_selected.connect(self._on_rag_file_selected_for_edit)
+        dialog.show()
+
+        # Keep a strong reference so the dialog is not garbage-collected
+        self._rag_file_browser = dialog
+
+    def _on_rag_file_selected_for_edit(self, file_path: str) -> None:
+        """Open a RAG source file in the story-panel file editor.
+
+        Switches to the story panel's tab widget (so the editor is visible)
+        and opens the file in an editable tab.  Saving the tab will trigger
+        automatic re-indexing via ``_on_file_saved_check_rag``.
+
+        Args:
+            file_path: Absolute path to the file to open.
+        """
+        self.view.open_file_tab(file_path)
+
+    def _on_file_saved_check_rag(self, file_path: str, _content: str) -> None:
+        """Re-index a saved file in every RAG database that contains it.
+
+        Connected to ``view.file_saved`` so it fires whenever any file tab
+        is saved (RAG or otherwise).  For each database that has this file
+        registered, ``rag_controller.reindex_file`` is run in a background
+        thread so the UI stays responsive during embedding generation.
+
+        Args:
+            file_path: Absolute path of the saved file.
+            _content: File content (already written to disk by PromptController;
+                      not used here directly).
+        """
+        resolved: str = str(Path(file_path).resolve())
+
+        # Check every visible (non-hidden) database for the file
+        matching_dbs: list = [
+            db_name
+            for db_name, _count, _sel in self.rag_model.get_databases(include_hidden=False)
+            if any(
+                str(Path(fp).resolve()) == resolved
+                for fp in self.rag_model.get_database_files(db_name)
+            )
+        ]
+
+        if not matching_dbs:
+            # File is not part of any RAG database — nothing to do
+            return
+
+        for db_name in matching_dbs:
+            self.view.append_logs(
+                f"\n📂 File saved — re-indexing '{Path(file_path).name}' in database '{db_name}'…\n"
+            )
+            # Run in a daemon thread to avoid blocking the GUI
+            thread = threading.Thread(
+                target=self.rag_controller.reindex_file,
+                args=(db_name, file_path),
+                daemon=True,
+            )
+            thread.start()
 
     def _on_override_selection(self, selected_text, start_pos, end_pos):
         """Handle override selection request.

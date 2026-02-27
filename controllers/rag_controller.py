@@ -709,6 +709,120 @@ class RAGController:
         except Exception:
             pass
 
+    def reindex_file(self, db_name: str, file_path: str) -> None:
+        """Remove stale chunks for *file_path* then re-ingest with current content.
+
+        Cost is O(new_file_chunks) in embedding calls — retained documents are
+        never re-embedded.  The approach is:
+
+          1. Walk ``index_to_docstore_id`` and classify each FAISS position as
+             "keep" or "remove" using the ``file_name`` / ``source`` metadata
+             that was stamped on every chunk at ingestion time.
+          2. For each kept position, call ``vectorstore.index.reconstruct(pos)``
+             to read the stored float vector back out of the FAISS index.  This
+             is a pure memory read — no embedding model is invoked.
+          3. Feed those (text, vector) pairs to ``FAISS.from_embeddings()``,
+             which builds a new FAISS index directly from pre-computed vectors.
+          4. Re-ingest the updated file so only its new chunks are embedded.
+
+        The method is safe to call from a background thread.
+
+        Args:
+            db_name: Name of the RAG database that contains the file.
+            file_path: Absolute path to the file that was saved.
+        """
+        self._init_components()
+        if self._embeddings is None:
+            return
+
+        file_name: str = Path(file_path).name
+        resolved_path: str = str(Path(file_path).resolve())
+        self._safe_log(f"\n🔄 Re-indexing '{file_name}' in database '{db_name}'…\n")
+
+        vectorstore = self._load_vectorstore(db_name)
+
+        if vectorstore is None:
+            # Nothing to prune — just ingest the file fresh.
+            self._safe_log("  No existing vectorstore found; ingesting fresh.\n")
+            self._ingest_file_with_progress(db_name, file_path, quiet=False)
+            self._safe_log(f"✅ Re-indexing of '{file_name}' complete.\n")
+            return
+
+        # ── Step 1: classify every FAISS position as keep or remove ──────
+        # index_to_docstore_id maps  faiss_position (int) → docstore_id (str)
+        keep_positions: list[int] = []
+        remove_count: int = 0
+
+        for faiss_pos, docstore_id in vectorstore.index_to_docstore_id.items():
+            doc = vectorstore.docstore._dict.get(docstore_id)
+            if doc is None:
+                continue
+            src_resolved: str = str(Path(doc.metadata.get("source", "")).resolve())
+            fname: str = doc.metadata.get("file_name", "")
+            # A chunk belongs to this file if either metadata field matches
+            if fname == file_name or src_resolved == resolved_path:
+                remove_count += 1
+            else:
+                keep_positions.append(faiss_pos)
+
+        self._safe_log(f"  Removing {remove_count} stale chunk(s) for '{file_name}'.\n")
+
+        if not keep_positions:
+            # Every chunk in this database came from the file being updated —
+            # skip reconstruction entirely and just clear + re-ingest.
+            self._safe_log("  All chunks were from this file; clearing vectorstore.\n")
+            self._vectorstores.pop(db_name, None)
+            self._clear_vectorstore_files(db_name)
+            self._ingest_file_with_progress(db_name, file_path, quiet=False)
+            self._safe_log(f"✅ Re-indexing of '{file_name}' complete.\n")
+            return
+
+        # ── Step 2: reconstruct stored vectors — no re-embedding ─────────
+        # vectorstore.index is a raw faiss.IndexFlatL2; .reconstruct(i) reads
+        # the float32 vector at FAISS position i directly from memory.
+        self._safe_log(
+            f"  Reconstructing {len(keep_positions)} retained vector(s) "
+            "(no re-embedding required)…\n"
+        )
+        retained_texts_and_embeddings: list[tuple[str, list[float]]] = []
+        retained_metadatas: list[dict] = []
+
+        for pos in keep_positions:
+            docstore_id: str = vectorstore.index_to_docstore_id[pos]
+            doc: Document = vectorstore.docstore._dict[docstore_id]
+            # Reconstruct the float32 vector stored at this FAISS position
+            vec: list[float] = vectorstore.index.reconstruct(pos).tolist()
+            retained_texts_and_embeddings.append((doc.page_content, vec))
+            retained_metadatas.append(doc.metadata)
+
+        # ── Step 3: build pruned vectorstore from pre-computed vectors ────
+        # FAISS.from_embeddings() accepts (text, vector) tuples directly so
+        # the embedding model is never called for retained documents.
+        self._safe_log("  Building pruned vectorstore from reconstructed vectors…\n")
+        try:
+            pruned_vs: FAISS = FAISS.from_embeddings(
+                text_embeddings=retained_texts_and_embeddings,
+                embedding=self._embeddings,
+                metadatas=retained_metadatas,
+            )
+        except Exception as exc:
+            self._safe_log(f"  ❌ Error building pruned vectorstore: {exc}\n")
+            traceback.print_exc()
+            return
+
+        # Persist the pruned vectorstore and refresh the in-memory cache
+        self._vectorstores.pop(db_name, None)
+        self._clear_vectorstore_files(db_name)
+        vs_path: Path = self._get_vectorstore_path(db_name)
+        pruned_vs.save_local(str(vs_path.parent), db_name)
+        self._vectorstores[db_name] = pruned_vs
+        self._safe_log(f"  ✓ Pruned vectorstore saved ({len(keep_positions)} chunk(s) retained).\n")
+
+        # ── Step 4: ingest the updated file (only this file is re-embedded) ──
+        self._safe_log(f"  Ingesting updated '{file_name}'…\n")
+        self._ingest_file_with_progress(db_name, file_path, quiet=False)
+        self._safe_log(f"✅ Re-indexing of '{file_name}' complete.\n")
+
     def _reingest_paths(self, db_name: str, paths: list[Path]) -> None:
         """Ingest a list of paths into a database and update their stored mtimes.
 

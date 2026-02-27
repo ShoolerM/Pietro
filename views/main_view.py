@@ -30,6 +30,7 @@ class MainView(QtWidgets.QWidget):
     rag_create_database_clicked = QtCore.pyqtSignal()
     rag_add_files_clicked = QtCore.pyqtSignal(str)  # database name
     rag_database_toggled = QtCore.pyqtSignal(str)  # database name
+    rag_database_browse_requested = QtCore.pyqtSignal(str)  # double-click on a database
     rag_refresh_clicked = QtCore.pyqtSignal()
     rag_delete_database_clicked = QtCore.pyqtSignal(str)  # database name
     rag_max_chunks_changed = QtCore.pyqtSignal(int)  # max chunks for auto-build
@@ -200,6 +201,9 @@ class MainView(QtWidgets.QWidget):
         )
         self.utilities_panel.rag_add_files_clicked.connect(self.rag_add_files_clicked.emit)
         self.utilities_panel.rag_database_toggled.connect(self.rag_database_toggled.emit)
+        self.utilities_panel.rag_database_browse_requested.connect(
+            self.rag_database_browse_requested.emit
+        )
         self.utilities_panel.rag_refresh_clicked.connect(self.rag_refresh_clicked.emit)
         self.utilities_panel.rag_delete_database_clicked.connect(
             self.rag_delete_database_clicked.emit

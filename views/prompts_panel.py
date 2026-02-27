@@ -29,6 +29,7 @@ class UtilitiesPanel(QtWidgets.QWidget):
     rag_create_database_clicked = QtCore.pyqtSignal()
     rag_add_files_clicked = QtCore.pyqtSignal(str)
     rag_database_toggled = QtCore.pyqtSignal(str)
+    rag_database_browse_requested = QtCore.pyqtSignal(str)  # double-click on a database
     rag_refresh_clicked = QtCore.pyqtSignal()
     rag_delete_database_clicked = QtCore.pyqtSignal(str)
     rag_max_chunks_changed = QtCore.pyqtSignal(int)
@@ -96,36 +97,25 @@ class UtilitiesPanel(QtWidgets.QWidget):
         self.rag_panel.font_size_changed.connect(self.font_size_changed.emit)
         self.logs_panel.font_size_changed.connect(self.font_size_changed.emit)
 
-        self.supplemental_panel.refresh_clicked.connect(
-            self.supplemental_refresh_clicked.emit
-        )
+        self.supplemental_panel.refresh_clicked.connect(self.supplemental_refresh_clicked.emit)
         self.supplemental_panel.add_clicked.connect(self.supplemental_add_clicked.emit)
         self.supplemental_panel.file_opened.connect(self.supplemental_file_opened.emit)
-        self.supplemental_panel.selections_changed.connect(
-            self._on_prompt_selections_changed
-        )
+        self.supplemental_panel.selections_changed.connect(self._on_prompt_selections_changed)
 
         self.system_panel.refresh_clicked.connect(self.system_refresh_clicked.emit)
         self.system_panel.add_clicked.connect(self.system_add_clicked.emit)
         self.system_panel.file_opened.connect(self.system_file_opened.emit)
         self.system_panel.selection_changed.connect(self._on_prompt_selections_changed)
 
-        self.rag_panel.create_database_clicked.connect(
-            self.rag_create_database_clicked.emit
-        )
+        self.rag_panel.create_database_clicked.connect(self.rag_create_database_clicked.emit)
         self.rag_panel.add_files_clicked.connect(self.rag_add_files_clicked.emit)
         self.rag_panel.database_toggled.connect(self.rag_database_toggled.emit)
+        self.rag_panel.database_browse_requested.connect(self.rag_database_browse_requested.emit)
         self.rag_panel.refresh_clicked.connect(self.rag_refresh_clicked.emit)
-        self.rag_panel.delete_database_clicked.connect(
-            self.rag_delete_database_clicked.emit
-        )
+        self.rag_panel.delete_database_clicked.connect(self.rag_delete_database_clicked.emit)
         self.rag_panel.max_chunks_changed.connect(self.rag_max_chunks_changed.emit)
-        self.rag_panel.summary_chunk_size_changed.connect(
-            self.rag_summary_chunk_size_changed.emit
-        )
-        self.rag_panel.score_threshold_changed.connect(
-            self.rag_score_threshold_changed.emit
-        )
+        self.rag_panel.summary_chunk_size_changed.connect(self.rag_summary_chunk_size_changed.emit)
+        self.rag_panel.score_threshold_changed.connect(self.rag_score_threshold_changed.emit)
         self.rag_panel.filename_boost_enabled_changed.connect(
             self.rag_filename_boost_enabled_changed.emit
         )
