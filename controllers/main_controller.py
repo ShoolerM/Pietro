@@ -117,6 +117,7 @@ class MainController:
         self.view.undo_clicked.connect(self._on_undo)
         self.view.stop_clicked.connect(self._on_stop)
         self.view.clear_clicked.connect(self._on_clear)
+        self.view.full_reset_requested.connect(self._on_full_reset)
         self.view.model_refresh_clicked.connect(self._on_refresh_models)
         self.view.model_changed.connect(self._on_model_changed)
         self.view.context_limit_changed.connect(self._on_context_limit_changed)
@@ -1142,6 +1143,54 @@ class MainController:
         self.story_model.planning_active = False
         # Reset story hash tracker so next generation doesn't think story changed
         self.notes_controller.reset_story_hash()
+
+    def _on_full_reset(self) -> None:
+        """Perform a full project reset.
+
+        Clears story content, undo history, notes, and summaries.
+        Chat/conversation histories are intentionally preserved.
+        Outline *sections* are also preserved but their statuses are reset to
+        pending and the writing bar reverts to 'Start Writing' so the same
+        outline can be used for a fresh write pass.
+        """
+        # --- Story content and undo history ---
+        self.story_model.clear_content()
+        self.story_model.clear_history()
+        self._markdown_content = ""
+
+        # --- Summary chunks ---
+        self.summary_model.clear()
+
+        # --- Author's notes (UI panel + story model cache) ---
+        self.view.notes_panel.clear_notes()
+        self.story_model.notes = ""
+
+        # --- Planning build state only (conversation history kept) ---
+        self.planning_model.build_state = None
+
+        # --- Reset outline section statuses to pending (sections themselves kept) ---
+        # Resets the tracker rows, reverts the button to Start Writing, and rebuilds
+        # _current_outline with all items unchecked so no metadata remembers progress.
+        self.view.llm_panel.reset_outline_progress()
+        # Sync the planning model's stored outline to the freshly-reset version
+        reset_outline: str = self.view.llm_panel.get_current_outline() or ""
+        self.planning_model.current_outline = reset_outline if reset_outline else None
+
+        # --- Persist the reset outline (all unchecked) so it survives a restart ---
+        self.settings_model.save_planning_conversation(
+            self.planning_model.conversation_history, outline=reset_outline
+        )
+
+        # --- Story model flags ---
+        self.story_model.planning_outline = ""
+        self.story_model.planning_active = False
+
+        # --- Notes hash tracker so next generation starts fresh ---
+        self.notes_controller.reset_story_hash()
+
+        self.view.append_logs(
+            "✅ Full reset complete. Outline sections preserved; statuses reset.\n"
+        )
 
     def _on_refresh_models(self):
         """Handle refresh models button click."""

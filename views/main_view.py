@@ -69,6 +69,9 @@ class MainView(QtWidgets.QWidget):
     )  # selected_text, start_pos, end_pos, prompt
     update_accepted = QtCore.pyqtSignal()  # user accepted the update
     update_rejected = QtCore.pyqtSignal()  # user rejected the update
+    full_reset_requested = (
+        QtCore.pyqtSignal()
+    )  # full reset: clear story + notes + summaries + history
 
     def __init__(self):
         super().__init__()
@@ -182,6 +185,7 @@ class MainView(QtWidgets.QWidget):
         self.story_panel.undo_requested.connect(self.undo_clicked.emit)
         self.story_panel.stop_requested.connect(self.stop_clicked.emit)
         self.story_panel.clear_requested.connect(self.clear_clicked.emit)
+        self.story_panel.full_reset_requested.connect(self.full_reset_requested.emit)
 
         # LLM panel signals
         self.llm_panel.font_size_changed.connect(self.font_size_changed.emit)

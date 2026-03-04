@@ -18,9 +18,7 @@ class StoryPanel(QtWidgets.QWidget):
     toggle_summarize_prompts_requested = (
         QtCore.pyqtSignal()
     )  # request to toggle prompt summarization
-    toggle_smart_mode_requested = (
-        QtCore.pyqtSignal()
-    )  # request to toggle build with Smart Mode
+    toggle_smart_mode_requested = QtCore.pyqtSignal()  # request to toggle build with Smart Mode
     auto_build_story_requested = (
         QtCore.pyqtSignal()
     )  # request to automatically build complete story
@@ -36,6 +34,9 @@ class StoryPanel(QtWidgets.QWidget):
     undo_requested = QtCore.pyqtSignal()  # Alt+Z: Undo last story change
     stop_requested = QtCore.pyqtSignal()  # Escape: Stop generation
     clear_requested = QtCore.pyqtSignal()  # Alt+Shift+X: Clear story
+    full_reset_requested = (
+        QtCore.pyqtSignal()
+    )  # Full reset: clear story + notes + summaries + history
 
     def __init__(self):
         super().__init__()
@@ -107,9 +108,7 @@ class StoryPanel(QtWidgets.QWidget):
 
         self.story_text = QtWidgets.QTextEdit()
         self.story_text.setAcceptRichText(True)
-        self.story_text.setPlaceholderText(
-            "Response output (appended as streamed output)"
-        )
+        self.story_text.setPlaceholderText("Response output (appended as streamed output)")
         self.story_text.installEventFilter(self)
         self.story_text.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
         self.story_text.customContextMenuRequested.connect(self._show_context_menu)
@@ -212,6 +211,11 @@ class StoryPanel(QtWidgets.QWidget):
         clear_action.setShortcut(QtGui.QKeySequence("Alt+Shift+X"))
         clear_action.triggered.connect(lambda: self.clear_requested.emit())
 
+        # Full Reset action: clears story, notes, summaries, and conversation history.
+        # Outline tracker content is preserved.  A confirmation dialog is shown first.
+        full_reset_action = menu.addAction("⚠️ Full Reset")
+        full_reset_action.triggered.connect(self._on_full_reset_requested)
+
         menu.addSeparator()
 
         # Check if text is selected
@@ -226,29 +230,21 @@ class StoryPanel(QtWidgets.QWidget):
 
         # Update Summary action
         update_summary_action = menu.addAction("🔄 Update Summary")
-        update_summary_action.triggered.connect(
-            lambda: self.update_summary_requested.emit()
-        )
+        update_summary_action.triggered.connect(lambda: self.update_summary_requested.emit())
 
         # Summarize Prompts toggle
         summarize_text = (
-            "Summarize Prompts: ON"
-            if self._summarize_prompts_enabled
-            else "Summarize Prompts: OFF"
+            "Summarize Prompts: ON" if self._summarize_prompts_enabled else "Summarize Prompts: OFF"
         )
         summarize_action = menu.addAction(summarize_text)
-        summarize_action.triggered.connect(
-            lambda: self.toggle_summarize_prompts_requested.emit()
-        )
+        summarize_action.triggered.connect(lambda: self.toggle_summarize_prompts_requested.emit())
 
         menu.addSeparator()
 
         # Build with RAG toggle
         build_rag_text = "Story Mode: ON" if self._smart_mode else "Story Mode: OFF"
         build_rag_action = menu.addAction(build_rag_text)
-        build_rag_action.triggered.connect(
-            lambda: self.toggle_smart_mode_requested.emit()
-        )
+        build_rag_action.triggered.connect(lambda: self.toggle_smart_mode_requested.emit())
 
         menu.addSeparator()
 
@@ -259,6 +255,23 @@ class StoryPanel(QtWidgets.QWidget):
 
         # Show menu at cursor position
         menu.exec_(self.story_text.mapToGlobal(position))
+
+    def _on_full_reset_requested(self) -> None:
+        """Show a confirmation dialog and emit full_reset_requested if the user confirms."""
+        reply = QtWidgets.QMessageBox.question(
+            self,
+            "Full Reset",
+            "This will permanently clear:\n\n"
+            "  \u2022 Story content and undo history\n"
+            "  \u2022 Author\u2019s notes\n"
+            "  \u2022 Summaries\n\n"
+            "Your outline sections and chat histories will be preserved.\n\n"
+            "Are you sure?",
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+            QtWidgets.QMessageBox.No,
+        )
+        if reply == QtWidgets.QMessageBox.Yes:
+            self.full_reset_requested.emit()
 
     def _save_current_file(self):
         """Save the currently active file tab when Ctrl+S is pressed."""
@@ -700,9 +713,7 @@ class StoryPanel(QtWidgets.QWidget):
         layout = QtWidgets.QVBoxLayout()
 
         # Instruction label
-        label = QtWidgets.QLabel(
-            "What changes would you like to make to the selected text?"
-        )
+        label = QtWidgets.QLabel("What changes would you like to make to the selected text?")
         layout.addWidget(label)
 
         # Text input
@@ -869,16 +880,11 @@ class StoryPanel(QtWidgets.QWidget):
         new_text_length = self._update_new_text_end - self._update_new_text_start
 
         # Remove the red original text and separator
-        if (
-            self._update_start_pos is not None
-            and self._update_new_text_start is not None
-        ):
+        if self._update_start_pos is not None and self._update_new_text_start is not None:
             cursor = self.story_text.textCursor()
             # Select from start to the beginning of new text (includes red original + separator)
             cursor.setPosition(self._update_start_pos)
-            cursor.setPosition(
-                self._update_new_text_start, QtGui.QTextCursor.KeepAnchor
-            )
+            cursor.setPosition(self._update_new_text_start, QtGui.QTextCursor.KeepAnchor)
             # Delete the red original text and separator
             cursor.removeSelectedText()
 
@@ -916,10 +922,7 @@ class StoryPanel(QtWidgets.QWidget):
     def _on_reject_update(self):
         """Handle reject button click - keep red original, remove green new text."""
         # Remove the separator (" → ") and green new text
-        if (
-            self._update_new_text_start is not None
-            and self._update_new_text_end is not None
-        ):
+        if self._update_new_text_start is not None and self._update_new_text_end is not None:
             cursor = self.story_text.textCursor()
             # Select from 3 chars before (the separator " → ") to end of new text
             separator_start = self._update_new_text_start - 3
@@ -929,16 +932,11 @@ class StoryPanel(QtWidgets.QWidget):
             cursor.removeSelectedText()
 
         # Clear red coloring from original text (make it normal white)
-        if (
-            self._update_start_pos is not None
-            and self._update_new_text_start is not None
-        ):
+        if self._update_start_pos is not None and self._update_new_text_start is not None:
             cursor = self.story_text.textCursor()
             cursor.setPosition(self._update_start_pos)
             # Select original text (without the separator)
-            cursor.setPosition(
-                self._update_new_text_start - 3, QtGui.QTextCursor.KeepAnchor
-            )
+            cursor.setPosition(self._update_new_text_start - 3, QtGui.QTextCursor.KeepAnchor)
 
             # Reset to default white text
             fmt = QtGui.QTextCharFormat()

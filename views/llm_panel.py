@@ -1140,6 +1140,30 @@ class LLMPanel(QtWidgets.QWidget):
         self._start_writing_button.setEnabled(True)
         self._writing_bar.show()
 
+    def reset_outline_progress(self) -> None:
+        """Reset all outline section statuses to pending and revert the writing bar
+        to its initial state, without removing the sections themselves.
+
+        Call this during a full project reset so the user can re-use the same
+        outline for a fresh write pass.
+        """
+        # Reset every tracker row to 'pending' visually
+        self.outline_tracker.reset()
+
+        # Rebuild the stored outline markdown so all items are unchecked ([ ])
+        self._current_outline = self._rebuild_outline_markdown()
+
+        # Revert the writing bar button to 'Start Writing'.
+        # Keep the bar visible if there are sections so the user can immediately
+        # start a fresh write pass; hide it only when the tracker is empty.
+        self._writing_active = False
+        self._start_writing_button.setText("▶ Start Writing")
+        self._start_writing_button.setEnabled(True)
+        if self.outline_tracker.section_count() > 0:
+            self._writing_bar.show()
+        else:
+            self._writing_bar.hide()
+
     def _rebuild_outline_markdown(self) -> str:
         """Reconstruct the markdown checklist outline from the current tracker sections.
 
