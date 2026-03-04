@@ -15,6 +15,20 @@ from PyQt5 import QtCore
 from models.planning_model import PlanningModel
 from views.llm_panel import LLMPanel
 
+# Characters from the planning notes/context from the author to enrich the RAG query.
+# The filename-boost system tokenizes the query string to fuzzy-match it against
+# file stems in the database.  Because the RAG query is normally just the current
+# plot-point task, character names that only appear in the planning notes would
+# never reach the tokenizer and their files would never be boosted.  Appending a
+# short excerpt from each text field ensures those names ARE present in the query
+# so that e.g. "Alexander.txt" is boosted when "Alexander" appears in the notes.
+RAG_NOTES_EXCERPT_CHARS: int = 400
+RAG_SUPP_EXCERPT_CHARS: int = 400
+# Include the full outline so character names that appear in *any* section title
+# (not just the currently-active one) reach the filename-boost tokenizer.  A
+# short, generic section title like "intro" contains no names on its own.
+RAG_OUTLINE_EXCERPT_CHARS: int = 800
+
 
 class PlanningController(QtCore.QObject):
     """Controller for planning mode functionality."""
@@ -690,14 +704,25 @@ class PlanningController(QtCore.QObject):
         else:
             max_rag_tokens = 0
 
-        # Query RAG
+        # Query RAG — build an enriched query so that character names (and other
+        # named entities defined in the planning notes) are visible to the
+        # filename-boost tokenizer.  Without this, a file named "Alexander.txt"
+        # would never be boosted for a task like "The group heads north" even
+        # though "Alexander" is mentioned throughout the planning notes.
         if max_rag_tokens > 0:
+            rag_query_parts: list[str] = [current_task]
+            if state.get("outline"):
+                rag_query_parts.append(state["outline"][:RAG_OUTLINE_EXCERPT_CHARS])
+            if state.get("notes"):
+                rag_query_parts.append(state["notes"][:RAG_NOTES_EXCERPT_CHARS])
+            if state.get("supp_text"):
+                rag_query_parts.append(state["supp_text"][:RAG_SUPP_EXCERPT_CHARS])
+            rag_query: str = " ".join(rag_query_parts)
+
             self.view.append_logs(
                 f"🔍 Querying knowledge bases (budget: {max_rag_tokens:,} tokens)...\n"
             )
-            rag_context = self.rag_controller.query_databases(
-                current_task, max_tokens=max_rag_tokens
-            )
+            rag_context = self.rag_controller.query_databases(rag_query, max_tokens=max_rag_tokens)
         else:
             self.view.append_logs(
                 "⚠️  Skipping RAG — no token headroom left after context components.\n"

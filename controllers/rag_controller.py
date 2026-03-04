@@ -986,12 +986,14 @@ class RAGController:
         self,
         query: str,
         selected_dbs: list[str],
+        quiet: bool = False,
     ) -> list[tuple[str, str]]:
         """Extract filenames from query that fuzzy match files in selected databases.
 
         Args:
             query: User query string
             selected_dbs: List of selected database names
+            quiet: Unused; retained for call-site compatibility
 
         Returns:
             list: List of (db_name, filename) tuples for matched files
@@ -1384,7 +1386,7 @@ class RAGController:
                 return ""
 
             matched_files: list[tuple[str, str]] = self._extract_matching_filenames(
-                query, selected_dbs
+                query, selected_dbs, quiet
             )
             boosted_chunks: list[ScoredChunk] = self._fetch_boosted_chunks(
                 query, matched_files, quiet
