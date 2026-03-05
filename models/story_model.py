@@ -105,7 +105,10 @@ class StoryModel(Observable):
     @staticmethod
     def estimate_token_count(text: str) -> int:
         """Estimate the number of tokens in a text string.
-        Uses a rough approximation of 4 characters per token.
+        Uses a conservative approximation of 3 characters per token.
+        Real LLM tokenizers average ~3.5 chars/token for English prose, so
+        dividing by 3 gives a safe over-estimate that reduces the risk of
+        accidentally exceeding the context window.
 
         Args:
             text: Text to estimate tokens for
@@ -115,7 +118,7 @@ class StoryModel(Observable):
         """
         if not text:
             return 0
-        return len(text) // 4
+        return len(text) // 3
 
     @staticmethod
     def extract_last_paragraphs(text: str, max_tokens: int = 500) -> str:

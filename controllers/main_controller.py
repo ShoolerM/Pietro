@@ -1666,35 +1666,9 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
         if system_prompt is None:
             system_prompt = self.view.utilities_panel.get_system_prompt_text()
 
-        # Check if notes should be regenerated
-        story_context = self.view.get_story_content()
-        should_regen = self.notes_controller.should_regenerate_notes(
-            story_context,
-            self.settings_model.auto_notes,
-            self.view.notes_panel.should_regenerate_notes(),
-            context_key="main",
-        )
-
-        if should_regen:
-            self._pending_auto_build_context = {
-                "initial_prompt": initial_prompt,
-                "notes": notes,
-                "supp_text": supp_text,
-                "system_prompt": system_prompt,
-                "attachments_text": attachments_text,
-            }
-
-            self.notes_controller.generate_notes_async(
-                story_context,
-                on_complete=self._handle_notes_ready,
-                on_error=self._handle_notes_error,
-                clear_existing=True,
-                set_waiting_on_finish=True,
-            )
-
-            return
-
-        # Continue with auto-build mode
+        # Start the build immediately — notes are generated *after* all chunks
+        # have been written, not before.  This prevents user-edited notes from
+        # being overwritten before a single word of the story is produced.
         self._continue_auto_build(initial_prompt, notes, supp_text, system_prompt, attachments_text)
 
     def _continue_auto_build(
@@ -1761,6 +1735,8 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
             # Render markdown
             self._markdown_content = self.view.get_story_content()
             self.view.render_story_markdown(self._markdown_content)
+            # Generate notes from the finished story (only if user hasn't edited them)
+            self._trigger_post_build_notes()
             return
 
         if self.llm_model.stop_generation:
@@ -1985,6 +1961,36 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
 
         # Continue with chunk generation
         self._execute_chunk_generation(story_for_llm)
+
+    def _trigger_post_build_notes(self) -> None:
+        """Generate notes after a Chunk Mode build completes, if appropriate.
+
+        Notes are only generated when:
+        - Auto-notes is enabled in settings
+        - The user has NOT manually edited the notes panel
+        - There is story content to summarise
+        """
+        if not self.settings_model.auto_notes:
+            return
+
+        # Respect user edits — only generate if notes are empty or still contain
+        # the last LLM-generated content (i.e. the user hasn't typed anything).
+        # should_regenerate_notes() handles both cases correctly.
+        if not self.view.notes_panel.should_regenerate_notes():
+            return
+
+        story_context: str = self.view.get_story_content()
+        if not story_context.strip():
+            return
+
+        self.notes_controller.generate_notes_async(
+            story_context,
+            on_complete=None,
+            on_error=None,
+            clear_existing=True,
+            set_waiting_on_start=False,
+            set_waiting_on_finish=False,
+        )
 
     def _on_auto_build_error(self, error_msg):
         """Handle errors during auto-build mode."""

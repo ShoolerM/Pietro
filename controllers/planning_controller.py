@@ -581,13 +581,15 @@ class PlanningController(QtCore.QObject):
         story_tokens = self.story_model.estimate_token_count(current_story)
         context_limit = self.settings_model.context_limit
 
-        # Calculate budgets
+        # Calculate budgets — must include all fixed prompt components so the
+        # summarization threshold matches what _execute_chunk_generation uses.
+        outline_tokens = self.story_model.estimate_token_count(state["outline"])
         supp_tokens = self.story_model.estimate_token_count(state["supp_text"])
         notes_tokens = self.story_model.estimate_token_count(state["notes"])
         system_tokens = self.story_model.estimate_token_count(state["system_prompt"])
         safety_buffer = 500
 
-        fixed_costs = supp_tokens + notes_tokens + system_tokens + safety_buffer
+        fixed_costs = outline_tokens + supp_tokens + notes_tokens + system_tokens + safety_buffer
         available_for_story = context_limit - fixed_costs
         max_raw_tokens = min(
             self.rag_model.summary_chunk_size,
@@ -664,9 +666,11 @@ class PlanningController(QtCore.QObject):
         # Account for ALL components that end up in the final prompt:
         #   SystemMessage  → system_prompt
         #   HumanMessage   → outline + story + task + upcoming + rag + notes + supp + instructions
-        # A fixed overhead covers the task description, upcoming items, and
-        # instruction boilerplate (conservatively estimated at 200 tokens).
-        QUERY_OVERHEAD_TOKENS: int = 200
+        # QUERY_OVERHEAD_TOKENS covers the fixed prompt labels, separators,
+        # backtick fences, upcoming-tasks boilerplate, and closing instruction
+        # text that _build_chunk_query assembles around the variable content.
+        # 500 tokens is a conservative estimate for that framing text.
+        QUERY_OVERHEAD_TOKENS: int = 500
 
         context_limit: int = self.settings_model.context_limit
         output_reserve: int = 2000
@@ -1098,7 +1102,7 @@ class PlanningController(QtCore.QObject):
         current_task = state["original_tasks"][section_index]
 
         # Re-query RAG for fresh context, accounting for all prompt components.
-        QUERY_OVERHEAD_TOKENS: int = 200
+        QUERY_OVERHEAD_TOKENS: int = 500
         context_limit: int = self.settings_model.context_limit
         outline_tokens: int = self.story_model.estimate_token_count(state["outline"])
         system_tokens: int = self.story_model.estimate_token_count(state["system_prompt"])
