@@ -141,6 +141,8 @@ class LLMPanel(QtWidgets.QWidget):
         self.outline_tracker.closed.connect(self._on_tracker_closed)
         # Rebuild outline when a section is deleted
         self.outline_tracker.section_deleted.connect(self._on_section_deleted)
+        # Clear outline state when the user removes all sections via right-click
+        self.outline_tracker.all_sections_cleared.connect(self._on_all_sections_cleared)
         layout.addWidget(self.outline_tracker)
 
         # Writing bar: Start Writing / Continue button + chunks-per-section spinbox
@@ -847,6 +849,8 @@ class LLMPanel(QtWidgets.QWidget):
     def _show_output_context_menu(self, position):
         """Show context menu for output area."""
         menu = self.thinking_text.createStandardContextMenu()
+        if menu is None:
+            menu = QtWidgets.QMenu(self)
         menu.addSeparator()
         clear_action = menu.addAction("Clear Output")
         clear_action.triggered.connect(self.clear_output_display)
@@ -1257,6 +1261,19 @@ class LLMPanel(QtWidgets.QWidget):
             self._writing_bar.hide()
             self._writing_active = False
         self.outline_changed.emit(new_outline)
+
+    @QtCore.pyqtSlot()
+    def _on_all_sections_cleared(self) -> None:
+        """Handle all sections being cleared at once via the right-click context menu.
+
+        Resets the stored outline to an empty string, hides the writing bar, and
+        emits outline_changed so the controller persists the cleared state.
+        """
+        self._current_outline = ""
+        self._writing_bar.hide()
+        self._writing_active = False
+        self._start_writing_button.setText("▶ Start Writing")
+        self.outline_changed.emit("")
 
     @QtCore.pyqtSlot(str)
     def set_outline_sections_json(self, sections_json: str):

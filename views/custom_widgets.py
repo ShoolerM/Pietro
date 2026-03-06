@@ -406,6 +406,8 @@ class OutlineTrackerWidget(QtWidgets.QWidget):
     section_added = QtCore.pyqtSignal(str, str)
     # Emitted when the user deletes a section; carries the original index
     section_deleted = QtCore.pyqtSignal(int)
+    # Emitted when the user clears all sections at once via the context menu
+    all_sections_cleared = QtCore.pyqtSignal()
     # Emitted when the user clicks the close button on the tracker header
     closed = QtCore.pyqtSignal()
 
@@ -454,6 +456,9 @@ class OutlineTrackerWidget(QtWidgets.QWidget):
         self._list.setVerticalScrollMode(QtWidgets.QAbstractItemView.ScrollPerPixel)
         self._list.verticalScrollBar().setSingleStep(15)
         self._list.installEventFilter(self)
+        # Right-click context menu for bulk operations
+        self._list.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
+        self._list.customContextMenuRequested.connect(self._on_list_context_menu)
         self._list.setStyleSheet(
             "QListWidget {"
             "  background: #1e1e1e;"
@@ -580,7 +585,38 @@ class OutlineTrackerWidget(QtWidgets.QWidget):
     def section_count(self) -> int:
         return len(self._sections)
 
-    # ── Private ────────────────────────────────────────────────────────────────
+    def clear_all_sections(self) -> None:
+        """Remove every section from the tracker and emit all_sections_cleared."""
+        self._sections.clear()
+        self._rebuild()
+        self.all_sections_cleared.emit()
+
+    # ── Private ──────────────────────────────────────────────────────────
+
+    def _on_list_context_menu(self, pos: QtCore.QPoint) -> None:
+        """Show a right-click context menu over the section list.
+
+        Args:
+            pos: Cursor position in list-widget local coordinates.
+        """
+        if not self._sections:
+            return
+
+        menu = QtWidgets.QMenu(self)
+        clear_action = menu.addAction("🗑️  Clear all sections")
+        clear_action.setToolTip("Remove every section from the outline")
+
+        action = menu.exec_(self._list.viewport().mapToGlobal(pos))
+        if action == clear_action:
+            reply = QtWidgets.QMessageBox.question(
+                self,
+                "Clear Outline",
+                "Remove all sections from the outline?\nThis cannot be undone.",
+                QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+                QtWidgets.QMessageBox.No,
+            )
+            if reply == QtWidgets.QMessageBox.Yes:
+                self.clear_all_sections()
 
     def _rebuild(self):
         self._list.clear()

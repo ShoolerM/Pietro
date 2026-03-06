@@ -13,21 +13,9 @@ from typing import Optional, Dict, Any, Callable, List
 from PyQt5 import QtCore
 
 from models.planning_model import PlanningModel
+from models.context_bundle import ContextBundle
+from controllers.context_controller import ContextManager
 from views.llm_panel import LLMPanel
-
-# Characters from the planning notes/context from the author to enrich the RAG query.
-# The filename-boost system tokenizes the query string to fuzzy-match it against
-# file stems in the database.  Because the RAG query is normally just the current
-# plot-point task, character names that only appear in the planning notes would
-# never reach the tokenizer and their files would never be boosted.  Appending a
-# short excerpt from each text field ensures those names ARE present in the query
-# so that e.g. "Alexander.txt" is boosted when "Alexander" appears in the notes.
-RAG_NOTES_EXCERPT_CHARS: int = 400
-RAG_SUPP_EXCERPT_CHARS: int = 400
-# Include the full outline so character names that appear in *any* section title
-# (not just the currently-active one) reach the filename-boost tokenizer.  A
-# short, generic section title like "intro" contains no names on its own.
-RAG_OUTLINE_EXCERPT_CHARS: int = 800
 
 
 class PlanningController(QtCore.QObject):
@@ -43,6 +31,7 @@ class PlanningController(QtCore.QObject):
         rag_model,
         summary_model,
         notes_controller,
+        context_manager: ContextManager,
         view,
         baml_controller=None,
     ):
@@ -55,6 +44,7 @@ class PlanningController(QtCore.QObject):
         self.rag_model = rag_model
         self.summary_model = summary_model
         self.notes_controller = notes_controller
+        self.context_manager = context_manager
         self.view = view
         self.baml_controller = baml_controller
 
@@ -112,7 +102,11 @@ class PlanningController(QtCore.QObject):
         UI stays responsive and the progress bar spins from the start.
         """
         try:
-            context = self._build_planning_context(user_input, current_outline, attachments_text)
+            # Delegate context assembly to the context manager.
+            bundle: ContextBundle = self.context_manager.assemble_for_planning(
+                user_input, current_outline, attachments_text
+            )
+            context: str = bundle.query
             history_str = self._format_conversation_history(conversation_history[:-1])
             base_url = self.settings_model.base_url
             model = self.settings_model.last_model
@@ -329,99 +323,6 @@ class PlanningController(QtCore.QObject):
             QtCore.Qt.QueuedConnection,
             QtCore.Q_ARG(str, log_msg),
         )
-
-    def _build_planning_context(
-        self, user_text: str, current_outline: Optional[str], attachments_text: str
-    ) -> str:
-        """Build system context for planning conversation.
-
-        Args:
-            user_text: User's current message
-            current_outline: Current outline if it exists
-
-        Returns:
-            System message content with full context
-        """
-        # Get existing story content and notes
-        # Read notes directly from the UI panel — story_model.notes is never
-        # populated from the panel and would always be empty here.
-        existing_story = self.story_model.content
-        existing_notes = self.view.notes_panel.get_notes_text()
-
-        # Extract story context using summarization
-        story_context = ""
-        story_tokens = 0
-        if existing_story:
-            max_recent_tokens = 2000
-            raw_recent, split_pos = self.story_model.extract_recent_content(
-                existing_story, max_recent_tokens
-            )
-            raw_tokens = self.story_model.estimate_token_count(raw_recent)
-            story_context, story_tokens = self.summary_model.get_context_for_llm(
-                raw_recent, raw_tokens
-            )
-
-        # Calculate dynamic RAG token budget
-        context_limit = self.settings_model.context_limit
-        output_reserve = 2000
-        # Estimate system prompt tokens (rough estimate)
-        system_prompt_estimate = 800
-        notes_tokens = (
-            self.story_model.estimate_token_count(existing_notes) if existing_notes else 0
-        )
-        outline_tokens = (
-            self.story_model.estimate_token_count(current_outline) if current_outline else 0
-        )
-        user_tokens = self.story_model.estimate_token_count(user_text)
-
-        available_for_rag = (
-            context_limit
-            - system_prompt_estimate
-            - story_tokens
-            - notes_tokens
-            - outline_tokens
-            - user_tokens
-            - output_reserve
-        )
-        # Use 20% for RAG in planning mode (keep it moderate to not overwhelm outline generation)
-        max_rag_tokens = int(available_for_rag * 0.20)
-        max_rag_tokens = max(500, min(max_rag_tokens, 2000))
-
-        # Query RAG databases with calculated budget
-        rag_context = self.rag_controller.query_databases(user_text, max_tokens=max_rag_tokens)
-
-        # Build dynamic context additions. The PLANNING_PROMPT system instructions
-        # live in the BAML template (models/baml_src/outline.baml); this string
-        # contains only the runtime-specific sections appended after them.
-        system_content = ""
-        # Add story context
-        if story_context:
-            system_content += "\n\n=== EXISTING STORY CONTENT (WHAT HAS BEEN WRITTEN) ==="
-            system_content += f"\n{story_context}"
-            system_content += (
-                "\n\nCRITICAL: Mark plot points as completed [x] ONLY if they describe events that are clearly written in the story text above. "
-                "If you're adding new plot points to continue the story, those MUST be unchecked [ ] because they haven't been written yet."
-            )
-        else:
-            system_content += "\n\n=== NO STORY CONTENT YET ==="
-            system_content += "\nThe story has not been started yet. ALL plot points in your outline must be marked as [ ] (unchecked)."
-
-        # Add notes
-        if existing_notes:
-            system_content += f"\n\nEXISTING NOTES:\n{existing_notes}"
-
-        # Add current outline
-        if current_outline:
-            system_content += f"\n\nCURRENT OUTLINE:\n{current_outline}\n\nThe user may want to refine this outline or discuss changes."
-
-        # Add RAG context
-        if rag_context:
-            system_content += f"\n\nRELEVANT CONTEXT FROM KNOWLEDGE BASE:\n{rag_context}"
-
-        if attachments_text:
-            system_content += f"\n\nATTACHMENTS:\n{attachments_text}"
-
-        return system_content
 
     def start_outline_build(self, outline: str, notes: str, supp_text: str, system_prompt: str):
         """Start outline-driven story generation.
@@ -660,88 +561,36 @@ class PlanningController(QtCore.QObject):
             state: Build state
             story_for_llm: Story content (possibly summarized)
         """
-        current_task = state["original_tasks"][state["current_task_index"]]
+        current_task: str = state["original_tasks"][state["current_task_index"]]
 
-        # ── Token budget ──────────────────────────────────────────────────────
-        # Account for ALL components that end up in the final prompt:
-        #   SystemMessage  → system_prompt
-        #   HumanMessage   → outline + story + task + upcoming + rag + notes + supp + instructions
-        # QUERY_OVERHEAD_TOKENS covers the fixed prompt labels, separators,
-        # backtick fences, upcoming-tasks boilerplate, and closing instruction
-        # text that _build_chunk_query assembles around the variable content.
-        # 500 tokens is a conservative estimate for that framing text.
-        QUERY_OVERHEAD_TOKENS: int = 500
-
-        context_limit: int = self.settings_model.context_limit
-        output_reserve: int = 2000
-
-        story_tokens: int = self.story_model.estimate_token_count(story_for_llm)
-        outline_tokens: int = self.story_model.estimate_token_count(state["outline"])
-        system_tokens: int = self.story_model.estimate_token_count(state["system_prompt"])
-        notes_tokens: int = self.story_model.estimate_token_count(state["notes"])
-        supp_tokens: int = self.story_model.estimate_token_count(state["supp_text"])
-
-        # Warn loudly if the system prompt alone exceeds the context window —
-        # llama.cpp will refuse the request entirely in that case.
-        if system_tokens >= context_limit:
-            self.view.append_logs(
-                f"\n⚠️  WARNING: System prompt ({system_tokens} tokens) exceeds the "
-                f"context limit ({context_limit} tokens). The request will likely fail. "
-                "Consider shortening your system prompt.\n\n"
-            )
-
-        fixed_costs: int = (
-            system_tokens
-            + outline_tokens
-            + story_tokens
-            + notes_tokens
-            + supp_tokens
-            + QUERY_OVERHEAD_TOKENS
-            + output_reserve
+        # Delegate all RAG querying and token budgeting to the context manager.
+        # assemble_for_chunk() returns a ContextBundle with rag_context populated;
+        # the final query string is built by _build_chunk_query below because it
+        # requires task-sequencing state not available to the context manager.
+        bundle: ContextBundle = self.context_manager.assemble_for_chunk(
+            story_for_llm=story_for_llm,
+            current_task=current_task,
+            outline=state["outline"],
+            notes=state["notes"],
+            supp_text=state["supp_text"],
+            system_prompt=state["system_prompt"],
         )
-        available_for_rag: int = context_limit - fixed_costs
+        rag_context: str = bundle.rag_context
+        state["last_rag_context"] = rag_context
 
-        # Only allocate RAG tokens when there is genuine headroom; never force a
-        # minimum that would push the total over the context limit.
-        if available_for_rag > 0:
-            max_rag_tokens: int = min(int(available_for_rag * 0.25), 3000)
-        else:
-            max_rag_tokens = 0
-
-        # Query RAG — build an enriched query so that character names (and other
-        # named entities defined in the planning notes) are visible to the
-        # filename-boost tokenizer.  Without this, a file named "Alexander.txt"
-        # would never be boosted for a task like "The group heads north" even
-        # though "Alexander" is mentioned throughout the planning notes.
-        if max_rag_tokens > 0:
-            rag_query_parts: list[str] = [current_task]
-            if state.get("outline"):
-                rag_query_parts.append(state["outline"][:RAG_OUTLINE_EXCERPT_CHARS])
-            if state.get("notes"):
-                rag_query_parts.append(state["notes"][:RAG_NOTES_EXCERPT_CHARS])
-            if state.get("supp_text"):
-                rag_query_parts.append(state["supp_text"][:RAG_SUPP_EXCERPT_CHARS])
-            rag_query: str = " ".join(rag_query_parts)
-
+        # Log RAG retrieval results for user transparency.
+        if bundle.rag_tokens > 0:
             self.view.append_logs(
-                f"🔍 Querying knowledge bases (budget: {max_rag_tokens:,} tokens)...\n"
+                f"🔍 Retrieved {bundle.rag_tokens:,} / {bundle.max_rag_tokens:,} RAG tokens\n"
             )
-            rag_context = self.rag_controller.query_databases(rag_query, max_tokens=max_rag_tokens)
+        elif bundle.max_rag_tokens > 0:
+            self.view.append_logs("  • No additional context found\n")
         else:
             self.view.append_logs(
                 "⚠️  Skipping RAG — no token headroom left after context components.\n"
             )
-            rag_context = None
-        state["last_rag_context"] = rag_context
 
-        if rag_context:
-            rag_tokens = self.story_model.estimate_token_count(rag_context)
-            self.view.append_logs(f"  ✓ Retrieved {rag_tokens} tokens of context\n")
-        else:
-            if max_rag_tokens > 0:
-                self.view.append_logs("  • No additional context found\n")
-
-        # Build query
+        # Build query — needs task-sequencing state only available here.
         # Determine whether this is the final chunk for the current section so the
         # prompt can explicitly instruct the LLM to close in a way that sets up the
         # next section naturally.
@@ -1101,33 +950,20 @@ class PlanningController(QtCore.QObject):
         state["task_chunk_count"] = 0
         current_task = state["original_tasks"][section_index]
 
-        # Re-query RAG for fresh context, accounting for all prompt components.
-        QUERY_OVERHEAD_TOKENS: int = 500
-        context_limit: int = self.settings_model.context_limit
-        outline_tokens: int = self.story_model.estimate_token_count(state["outline"])
-        system_tokens: int = self.story_model.estimate_token_count(state["system_prompt"])
-        story_tokens: int = self.story_model.estimate_token_count(story_up_to_section)
-        notes_tokens: int = self.story_model.estimate_token_count(state["notes"])
-        supp_tokens: int = self.story_model.estimate_token_count(state["supp_text"])
-        fixed_costs: int = (
-            system_tokens
-            + outline_tokens
-            + story_tokens
-            + notes_tokens
-            + supp_tokens
-            + QUERY_OVERHEAD_TOKENS
-            + 2000  # output reserve
+        # Re-query RAG via the context manager for fresh, properly budgeted context.
+        bundle: ContextBundle = self.context_manager.assemble_for_chunk(
+            story_for_llm=story_up_to_section,
+            current_task=current_task,
+            outline=state["outline"],
+            notes=state["notes"],
+            supp_text=state["supp_text"],
+            system_prompt=state["system_prompt"],
         )
-        available: int = context_limit - fixed_costs
-        max_rag_tokens: int = min(int(available * 0.25), 3000) if available > 0 else 0
-        rag_context = (
-            self.rag_controller.query_databases(current_task, max_tokens=max_rag_tokens)
-            if max_rag_tokens > 0
-            else None
-        )
-        state["last_rag_context"] = rag_context
+        state["last_rag_context"] = bundle.rag_context
 
-        query = self._build_chunk_query(state, story_up_to_section, current_task, rag_context)
+        query = self._build_chunk_query(
+            state, story_up_to_section, current_task, bundle.rag_context
+        )
 
         self.view.append_logs(f"\n\u21ba Rewriting section {section_index + 1} via diff...\n")
         self.view.set_waiting(True)

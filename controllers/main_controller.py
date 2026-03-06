@@ -18,8 +18,9 @@ from views.main_view import MainView
 from controllers.prompt_controller import PromptController
 from controllers.llm_controller import LLMController
 from controllers.rag_controller import RAGController
-from controllers.context_controller import ContextController
+from controllers.context_controller import ContextManager
 from controllers.planning_controller import PlanningController
+from models.context_bundle import ContextBundle
 from controllers.settings_controller import SettingsController
 from controllers.notes_controller import NotesController
 from controllers.baml_controller import BamlController
@@ -63,7 +64,7 @@ class MainController:
         self.llm_controller = LLMController(self.llm_model, self.story_model, self.settings_model)
         self.notes_controller = NotesController(self.settings_model, self.llm_controller, self.view)
         self.rag_controller = RAGController(self.rag_model, self.view)
-        self.context_controller = ContextController(
+        self.context_manager = ContextManager(
             self.story_model,
             self.settings_model,
             self.summary_model,
@@ -87,6 +88,7 @@ class MainController:
             self.rag_model,
             self.summary_model,
             self.notes_controller,
+            self.context_manager,
             self.view,
             baml_controller=BamlController(self.view),
         )
@@ -539,6 +541,11 @@ class MainController:
             supp_text: Supplemental prompts text
             system_prompt: System prompt text
         """
+        # Sync notes to the model immediately so every downstream context-assembly
+        # call (including those running on background threads) reads the same value
+        # from story_model.notes rather than going directly to the view widget.
+        self.story_model.notes = notes
+
         # Save user message to normal conversation history
         try:
             if not self.view.llm_panel.is_planning_mode():
@@ -659,6 +666,7 @@ class MainController:
         self.llm_model.reset_stop_flag()
         self.view.set_stop_enabled(True)
 
+        # Ensure the hidden __ask_readme__ database is built / up to date.
         readme_path = Path("README.md")
         guide_path = Path("models") / "ASK_MODE_GUIDE.md"
         include_ask_db = readme_path.exists() or guide_path.exists()
@@ -667,22 +675,20 @@ class MainController:
                 readme_path, extra_paths=[guide_path]
             )
 
+        # Build the database selection list, injecting __ask_readme__ when present.
         selected_dbs = self.rag_model.get_selected_databases()
-        if include_ask_db:
-            selected_set = list(dict.fromkeys(selected_dbs + ["__ask_readme__"]))
-        else:
-            selected_set = selected_dbs
-
-        rag_context = self.rag_controller.query_databases(
-            user_input, selected_dbs_override=selected_set, quiet=True
+        selected_set = (
+            list(dict.fromkeys(selected_dbs + ["__ask_readme__"]))
+            if include_ask_db
+            else selected_dbs
         )
 
-        final_query = user_input
-        if rag_context:
-            final_query += "\n\nRELEVANT CONTEXT FROM KNOWLEDGE BASE:\n" + rag_context
-
-        if attachments_text:
-            final_query += "\n\n" + attachments_text
+        # Assemble context and query via the context manager.
+        bundle = self.context_manager.assemble_for_ask(
+            user_input=user_input,
+            attachments_text=attachments_text,
+            selected_dbs_override=selected_set,
+        )
 
         system_prompt = self.settings_model.ask_prompt_template
 
@@ -696,7 +702,7 @@ class MainController:
         self.view.set_waiting(True)
 
         self.llm_controller.invoke_llm(
-            final_query,
+            bundle.query,
             system_prompt,
             image_payloads,
             self.view.llm_panel.append_ai_stream,
@@ -995,74 +1001,49 @@ class MainController:
         image_payloads = ctx.get("image_payloads", [])
         current_story = ctx["current_story"]
 
-        # Build final query
-        if story_for_llm:
-            final_query = (
-                "Based on this story so far:\n```\n",
-                story_for_llm,
-                "\n```\nthe following should happen next (user input):\n",
-                user_input,
-            )
-            final_query = "".join([p for p in final_query if p is not None])
-        else:
-            final_query = user_input
-
-        # Save to history before appending new content
+        # Save to history before appending new content.
         self.story_model.save_to_history()
 
-        # Query RAG databases for relevant context
-        rag_context = self.rag_controller.query_databases(user_input)
-        if rag_context:
-            rag_tokens = self.story_model.estimate_token_count(rag_context)
-            max_rag_tokens = 600
+        # Assemble context and build the final query via the context manager.
+        # This path now uses a properly budgeted RAG query (previously the RAG
+        # call here had no max_tokens argument and fell back to the default 2000).
+        bundle = self.context_manager.assemble_for_generation(
+            user_input=user_input,
+            story_for_llm=story_for_llm,
+            notes=notes,
+            supp_text=supp_text,
+            system_prompt=system_prompt,
+            planning_outline=(
+                self.story_model.planning_outline if self.story_model.planning_active else None
+            ),
+            attachments_text=attachments_text if attachments_text else "",
+        )
 
-            # Check if RAG context is too large
-            if rag_tokens > max_rag_tokens:
-                self.view.append_logs(
-                    f"\n⚠️ RAG context too large ({rag_tokens} > {max_rag_tokens} tokens)\n"
-                )
-                self.view.append_logs("🔄 Condensing RAG context...\n")
-
-                rag_context, rag_tokens = self.llm_controller.summarize_rag_context(
-                    rag_context, max_rag_tokens
-                )
-
-                self.view.append_logs(f"  ✓ Reduced to {rag_tokens} tokens\n")
-
-            final_query = final_query + "\n\nRELEVANT CONTEXT FROM KNOWLEDGE BASE:\n" + rag_context
-            self.view.append_logs(f"\n🔍 Including RAG context ({rag_tokens} tokens)\n")
-
-        # Always append supplemental text
+        # Log context components for visibility.
+        if bundle.rag_context:
+            self.view.append_logs(f"\n🔍 Including RAG context ({bundle.rag_tokens} tokens)\n")
         if supp_text:
-            final_query = final_query + "\n\n" + supp_text
             self.view.append_logs(
                 f"\n📎 Including {len(supp_text)} chars of supplemental prompts\n"
             )
-
-        # Always append notes text
         if notes:
-            final_query = final_query + "\n\nAUTHOR'S NOTES (for context):\n" + notes
             self.view.append_logs(f"📝 Including {len(notes)} chars of author notes\n")
-
         if attachments_text:
-            final_query = final_query + "\n\n" + attachments_text
             self.view.append_logs("📎 Including attachments context\n")
-
-        # Show system prompt info
         if system_prompt:
             self.view.append_logs(f"🔧 Using system prompt ({len(system_prompt)} chars)\n")
 
-        # Start waiting animation
+        # Start waiting animation.
         self.view.set_waiting(True)
 
-        # Add newline before response
+        # Add newline before response.
         if current_story:
             self.view.append_story_content("\n")
 
-        # Invoke LLM in background
+        # Invoke LLM in background.
         self.llm_controller.invoke_llm(
-            final_query,
-            system_prompt,
+            bundle.query,
+            bundle.system_prompt,
             image_payloads,
             self._on_text_appended,
             self.view.append_llm_panel_text,
@@ -1450,77 +1431,37 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
             end_pos: End position of selection
             prompt: The change instruction from dialog
         """
-        # Get system prompt
-        system_prompt = self.view.utilities_panel.get_system_prompt_text()
+        # Read the system prompt from the view (used for the override call).
+        system_prompt: str = self.view.utilities_panel.get_system_prompt_text()
 
-        # Reset stop flag and enable stop button
+        # Reset stop flag and enable stop button.
         self.llm_model.reset_stop_flag()
         self.view.set_stop_enabled(True)
         self.view.set_waiting(True)
 
-        # Save story to history for undo
-        current_story = self.view.get_story_content()
+        # Save story to history for undo.
+        current_story: str = self.view.get_story_content()
         self._markdown_content = current_story
         self.story_model.content = current_story
         self.story_model.save_to_history()
 
-        # Gather context using context controller
-        context = self.context_controller.gather_context_for_edit(
-            selected_text, start_pos, end_pos, prompt
+        # Assemble full edit context and query via the context manager.
+        # story_model.notes is already synced from _on_send for standard paths;
+        # for the right-click edit path we sync it here from the view directly.
+        self.story_model.notes = self.view.notes_panel.get_notes_text()
+        bundle = self.context_manager.assemble_for_edit(
+            selected_text=selected_text,
+            start_pos=start_pos,
+            end_pos=end_pos,
+            prompt=prompt,
+            system_prompt=system_prompt,
         )
 
-        # Build query with surrounding context and RAG
-        query = "Rewrite the following text according to the instruction."
-
-        # Add context before if available
-        if context["context_before"]:
-            query += f"""
-
-CONTEXT BEFORE (do not modify this):
-{context["context_before"]}"""
-
-        query += f"""
-
-TEXT TO REWRITE:
-{selected_text}"""
-
-        # Add context after if available
-        if context["context_after"]:
-            query += f"""
-
-CONTEXT AFTER (do not modify this):
-{context["context_after"]}"""
-
-        query += f"""
-
-INSTRUCTION:
-{prompt}"""
-
-        # Add RAG context if available
-        if context["rag_context"]:
-            query += f"""
-
-RELEVANT CONTEXT FROM KNOWLEDGE BASE:
-{context["rag_context"]}"""
-
-        # Add notes if available
-        if context["notes"]:
-            query += f"""
-
-ADDITIONAL CONTEXT (author's notes):
-{context["notes"]}"""
-
-        query += """
-
-REWRITTEN VERSION (output only the rewritten text, nothing else):"""
-
-        # Initialize streaming replacement
+        # Initialise streaming replacement and invoke LLM.
         self.view.start_text_update(start_pos, end_pos)
-
-        # Invoke LLM with streaming update
         self.llm_controller.override_text_with_streaming(
-            query=query,
-            system_prompt=system_prompt,
+            query=bundle.query,
+            system_prompt=bundle.system_prompt,
             stream_callback=self.view.stream_override_text,
             completion_callback=self._on_update_complete,
             set_stop_enabled_callback=self.view.set_stop_enabled,
@@ -1808,33 +1749,6 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
             )
             self.view.append_logs(f"  ✓ Reduced to {notes_tokens} tokens\n")
 
-        # Query RAG with initial prompt + recent story content
-        rag_query = state["initial_prompt"]
-        if current_story:
-            # Use last 500 chars of story for RAG context
-            recent_story = current_story[-500:] if len(current_story) > 500 else current_story
-            rag_query = f"{state['initial_prompt']}\n\nRecent story content:\n{recent_story}"
-
-        # Calculate dynamic RAG budget for auto-build (25% allocation)
-        context_limit = self.settings_model.context_limit
-        output_reserve = 2000
-        available_for_rag_and_story = (
-            context_limit - supp_tokens - notes_tokens - system_tokens - output_reserve
-        )
-        max_rag_tokens = int(available_for_rag_and_story * 0.25)  # 25% for RAG in auto-build
-        max_rag_tokens = max(500, min(max_rag_tokens, 3000))
-
-        self.view.append_logs(f"🔍 Querying RAG databases (budget: {max_rag_tokens:,} tokens)...\n")
-        rag_context = self.rag_controller.query_databases(rag_query, max_tokens=max_rag_tokens)
-
-        if rag_context:
-            rag_tokens = self.story_model.estimate_token_count(rag_context)
-            self.view.append_logs(f"  ✓ Retrieved {rag_tokens:,} tokens from RAG\n")
-            state["last_rag_context"] = rag_context
-        else:
-            self.view.append_logs("  ℹ️ No RAG results\n")
-            state["last_rag_context"] = None
-
         # Check if we need to summarize story
         story_tokens = self.story_model.estimate_token_count(current_story)
         fixed_costs = supp_tokens + notes_tokens + system_tokens + safety_buffer
@@ -1867,44 +1781,38 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
         # Build query for this chunk
         self._execute_chunk_generation(story_for_llm)
 
-    def _execute_chunk_generation(self, story_for_llm):
+    def _execute_chunk_generation(self, story_for_llm: str) -> None:
         """Execute the actual chunk generation with the prepared context."""
         state = self._auto_build_state
 
-        # Build final query
-        query_parts = []
-
-        if story_for_llm:
-            query_parts.append(f"Story so far:\n```\n{story_for_llm}\n```\n\n")
-
-        if state["last_rag_context"]:
-            query_parts.append(f"Relevant context:\n{state['last_rag_context']}\n\n")
-
-        if state["notes"]:
-            query_parts.append(f"Author notes:\n{state['notes']}\n\n")
-
-        if state["supp_text"]:
-            query_parts.append(f"Additional instructions:\n{state['supp_text']}\n\n")
-
-        if state.get("attachments_text"):
-            query_parts.append(f"{state['attachments_text']}\n\n")
-
-        query_parts.append(f"Initial prompt: {state['initial_prompt']}\n\n")
-        query_parts.append(
-            f"Continue the story. Write EXACTLY {state['paragraphs_per_chunk']} paragraphs. "
-            f"Maintain narrative flow and character consistency."
+        # Delegate all RAG querying, token budgeting, and query assembly to the
+        # context manager so this method stays free of inline context logic.
+        bundle: ContextBundle = self.context_manager.assemble_for_auto_build(
+            initial_prompt=state["initial_prompt"],
+            story_for_llm=story_for_llm,
+            notes=state["notes"],
+            supp_text=state["supp_text"],
+            system_prompt=state["system_prompt"],
+            paragraphs_per_chunk=state["paragraphs_per_chunk"],
+            attachments_text=state.get("attachments_text", ""),
         )
 
-        final_query = "".join(query_parts)
+        # Log RAG retrieval result for user transparency.
+        if bundle.rag_tokens > 0:
+            self.view.append_logs(
+                f"🔍 Retrieved {bundle.rag_tokens:,} / {bundle.max_rag_tokens:,} RAG tokens\n"
+            )
+        else:
+            self.view.append_logs("  ℹ️ No RAG results\n")
 
-        # Generate chunk with paragraph limit
+        # Generate chunk with paragraph limit.
         self.view.append_logs(f"✍️ Generating {state['paragraphs_per_chunk']} paragraphs...\n\n")
 
-        # Start waiting animation before LLM call
+        # Start waiting animation before LLM call.
         self.view.set_waiting(True)
 
         self.llm_controller.generate_story_chunk(
-            final_query,
+            bundle.query,
             state["system_prompt"],
             state["paragraphs_per_chunk"],
             self.view.append_story_content,
@@ -2047,13 +1955,16 @@ REWRITTEN VERSION (output only the rewritten text, nothing else):"""
             user_messages = [msg["content"] for msg in saved_conversation if msg["role"] == "user"]
             self.view.llm_panel.user_message_history = user_messages
 
-        # Restore the current SESSION outline from in-memory state only.
-        # Reading from the settings file would load outlines from previous app
-        # launches, which is undesirable.  planning_model.current_outline is None
-        # at startup, so a fresh launch always produces an empty tracker.
-        # Within the same session, switching away from Planning and back restores
-        # the outline the user was working on.
+        # Restore the outline: prefer the in-memory session outline (set when
+        # the user was already in Planning during this run).  If none exists yet
+        # (first entry after launch) fall back to the outline persisted on disk
+        # so the tracker is repopulated automatically on restart.
         current_outline = self.planning_model.current_outline
+        if not current_outline or not current_outline.strip():
+            current_outline = self.settings_model.get_planning_outline()
+            if current_outline:
+                # Bring the in-memory model up to date so saves stay consistent
+                self.planning_model.current_outline = current_outline
         if current_outline and current_outline.strip():
             sections = self.planning_model.parse_outline_to_sections(current_outline)
             if sections:
