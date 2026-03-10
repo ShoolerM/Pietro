@@ -24,7 +24,6 @@ class FileTreeWidget(QtWidgets.QTreeWidget):
             return
 
         # Get the drop target
-        drop_indicator = self.dropIndicatorPosition()
         target_item = self.itemAt(event.pos())
 
         # Determine the destination directory
@@ -120,19 +119,30 @@ class AutoGrowTextEdit(QtWidgets.QTextEdit):
         super().keyPressEvent(event)
 
 
-# Stylesheet for the section-edit dialog
-_EDIT_DIALOG_STYLE: str = (
-    "QDialog { background: #1e1e1e; }"
-    "QLabel { color: #cccccc; }"
-    "QLineEdit { background: #2d2d2d; color: #e0e0e0; border: 1px solid #555;"
-    "  border-radius: 3px; padding: 4px; }"
-    "QTextEdit { background: #2d2d2d; color: #e0e0e0; border: 1px solid #555;"
-    "  border-radius: 3px; padding: 4px; }"
-    "QPushButton { background: #3a3a3a; color: #cccccc; border: 1px solid #555;"
-    "  border-radius: 3px; padding: 4px 12px; }"
-    "QPushButton:hover { background: #4a4a4a; border-color: #888; }"
-    "QPushButton:pressed { background: #555; }"
-)
+# Debounce interval for in-place edit signals to avoid firing on every keystroke
+_EDIT_DEBOUNCE_MS: int = 300
+
+# Maximum number of characters used when auto-generating a title from body text
+_TITLE_MAX_CHARS: int = 40
+
+
+def _title_from_body(body: str) -> str:
+    """Generate a short title from the first sentence or words of a body string.
+
+    Args:
+        body: The full body/guidelines text to derive a title from.
+
+    Returns:
+        A string of at most _TITLE_MAX_CHARS characters ending on a word boundary.
+    """
+    # Use the first sentence up to _TITLE_MAX_CHARS chars
+    first_sentence: str = body.split(".")[0].strip()
+    if len(first_sentence) <= _TITLE_MAX_CHARS:
+        return first_sentence or body.strip()[:_TITLE_MAX_CHARS]
+    # Truncate at the last word boundary within the limit
+    truncated: str = first_sentence[:_TITLE_MAX_CHARS]
+    last_space: int = truncated.rfind(" ")
+    return truncated[:last_space].rstrip() if last_space > 0 else truncated
 
 
 class OutlineSectionRow(QtWidgets.QWidget):
@@ -142,7 +152,7 @@ class OutlineSectionRow(QtWidgets.QWidget):
     uncheck_clicked = QtCore.pyqtSignal()
     # Emitted when the user clicks [ ] / [▶] on a pending/active section to mark it done
     check_clicked = QtCore.pyqtSignal()
-    # Emitted when the user edits the section title/details; carries (new_title, new_details)
+    # Emitted when the user edits the section details; carries (title, new_details)
     section_edited = QtCore.pyqtSignal(str, str)
     # Emitted when the user clicks the delete button on this row
     delete_clicked = QtCore.pyqtSignal()
@@ -157,18 +167,25 @@ class OutlineSectionRow(QtWidgets.QWidget):
         "active": "#4a9eff",
         "done": "#4eff9e",
     }
-    _STATUS_TITLE_COLORS = {
-        "pending": "#888888",
-        "active": "#e0e0e0",
-        "done": "#cccccc",
+    _STATUS_DETAILS_COLORS = {
+        "pending": "#777777",
+        "active": "#aaaaaa",
+        "done": "#888888",
     }
 
     def __init__(self, index: int, title: str, details: str, status: str = "pending", parent=None):
         super().__init__(parent)
-        self._status = status
-        self._init_ui(title, details)
+        # Title is stored for internal markdown reconstruction but not displayed
+        self._title: str = title
+        self._status: str = status
+        # Debounce timer so text-change signals are not fired on every keystroke
+        self._edit_debounce_timer = QtCore.QTimer(self)
+        self._edit_debounce_timer.setSingleShot(True)
+        self._edit_debounce_timer.setInterval(_EDIT_DEBOUNCE_MS)
+        self._edit_debounce_timer.timeout.connect(self._emit_section_edited)
+        self._init_ui(details)
 
-    def _init_ui(self, title: str, details: str) -> None:
+    def _init_ui(self, details: str) -> None:
         layout = QtWidgets.QHBoxLayout(self)
         layout.setContentsMargins(6, 4, 6, 4)
         layout.setSpacing(6)
@@ -184,46 +201,18 @@ class OutlineSectionRow(QtWidgets.QWidget):
         self._status_label.clicked.connect(self._on_status_clicked)
         layout.addWidget(self._status_label)
 
-        # Text column (title + details). Details label is always created but
-        # hidden when empty, so update_content can show/hide it cleanly.
-        self._text_layout = QtWidgets.QVBoxLayout()
-        self._text_layout.setContentsMargins(0, 0, 0, 0)
-        self._text_layout.setSpacing(1)
-
-        self._title_label = QtWidgets.QLabel(title)
-        self._title_label.setWordWrap(True)
-        title_font = self._title_label.font()
-        title_font.setBold(True)
-        self._title_label.setFont(title_font)
-        self._text_layout.addWidget(self._title_label)
-
-        # Always create the details label; hide it when there is no detail text
-        self._details_label = QtWidgets.QLabel(details or "")
-        self._details_label.setWordWrap(True)
-        self._details_label.setStyleSheet("color: #777777; font-size: 11px;")
-        self._text_layout.addWidget(self._details_label)
-        if not details:
-            self._details_label.hide()
-
-        layout.addLayout(self._text_layout, stretch=1)
-
-        # Edit button – always visible, lets the user modify section title/details.
-        # Use \u270f (pencil) via stylesheet font-family so CSS fallback chains work
-        # properly (QFont.setFamily only accepts a single name, not a comma list).
-        # Do NOT use setFlat(True) — a flat button with a missing glyph is completely
-        # invisible against the dark background.
-        self._edit_button = QtWidgets.QPushButton("\u270f")
-        self._edit_button.setFixedSize(24, 24)
-        self._edit_button.setToolTip("Edit this section")
-        self._edit_button.setCursor(QtCore.Qt.PointingHandCursor)
-        self._edit_button.setStyleSheet(
-            "QPushButton { color: #aaaaaa; background: #2a2a2a; border: 1px solid #444;"
-            " border-radius: 3px;"
-            " font-family: 'Segoe UI Symbol', 'Symbola', sans-serif; }"
-            "QPushButton:hover { color: #ffffff; background: #3a3a3a; border-color: #888; }"
+        # Inline editable body text — replaces the separate title label and read-only
+        # details label. The title is stored internally but not shown to the user.
+        self._details_edit = QtWidgets.QPlainTextEdit(details or "")
+        self._details_edit.setPlaceholderText("Section guidelines...")
+        self._details_edit.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
+        self._details_edit.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
+        self._details_edit.setFrameStyle(QtWidgets.QFrame.NoFrame)
+        self._details_edit.setSizePolicy(
+            QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Preferred
         )
-        self._edit_button.clicked.connect(self._on_edit_clicked)
-        layout.addWidget(self._edit_button)
+        self._details_edit.textChanged.connect(self._on_text_changed)
+        layout.addWidget(self._details_edit, stretch=1)
 
         # Delete button — always visible; removes this section from the outline
         self._delete_button = QtWidgets.QPushButton("\u2715")
@@ -242,7 +231,7 @@ class OutlineSectionRow(QtWidgets.QWidget):
 
     def _apply_colors(self) -> None:
         label_color: str = self._STATUS_LABEL_COLORS.get(self._status, "#666666")
-        title_color: str = self._STATUS_TITLE_COLORS.get(self._status, "#888888")
+        details_color: str = self._STATUS_DETAILS_COLORS.get(self._status, "#777777")
 
         # Base button style – mimics a plain label (no border, transparent background)
         base_style: str = (
@@ -265,7 +254,20 @@ class OutlineSectionRow(QtWidgets.QWidget):
             self._status_label.setCursor(QtCore.Qt.ArrowCursor)
             self._status_label.setToolTip("")
 
-        self._title_label.setStyleSheet(f"color: {title_color};")
+        # Update the details edit text color to reflect the current section status
+        self._details_edit.setStyleSheet(
+            f"QPlainTextEdit {{"
+            f"  background: transparent;"
+            f"  color: {details_color};"
+            f"  font-size: 11px;"
+            f"  border: none;"
+            f"  padding: 0;"
+            f"}}"
+            f"QPlainTextEdit:focus {{"
+            f"  background: #252525;"
+            f"  border-bottom: 1px solid #444;"
+            f"}}"
+        )
 
     def _on_status_clicked(self) -> None:
         """Emit the appropriate signal when the status icon is clicked."""
@@ -274,64 +276,36 @@ class OutlineSectionRow(QtWidgets.QWidget):
         elif self._status in ("pending", "active"):
             self.check_clicked.emit()
 
-    def _on_edit_clicked(self) -> None:
-        """Open a modal dialog to let the user edit the section title and details."""
-        dialog = QtWidgets.QDialog(self)
-        dialog.setWindowTitle("Edit Section")
-        dialog.setMinimumWidth(420)
-        dialog.setStyleSheet(_EDIT_DIALOG_STYLE)
+    def _on_text_changed(self) -> None:
+        """Restart the debounce timer so section_edited is not fired on every keystroke."""
+        self._edit_debounce_timer.stop()
+        self._edit_debounce_timer.start()
+        # Ask the layout to recalculate the row height as the content grows/shrinks
+        self.updateGeometry()
 
-        dialog_layout = QtWidgets.QVBoxLayout(dialog)
-        dialog_layout.setSpacing(8)
-        dialog_layout.setContentsMargins(12, 12, 12, 12)
+    def _emit_section_edited(self) -> None:
+        """Emit section_edited with the current details text after the debounce period.
 
-        # Title field
-        title_label = QtWidgets.QLabel("Title:")
-        dialog_layout.addWidget(title_label)
-        title_edit = QtWidgets.QLineEdit(self._title_label.text())
-        dialog_layout.addWidget(title_edit)
-
-        # Details field
-        details_label = QtWidgets.QLabel("Details:")
-        dialog_layout.addWidget(details_label)
-        details_edit = QtWidgets.QTextEdit()
-        details_edit.setPlainText(
-            self._details_label.text() if self._details_label.isVisible() else ""
-        )
-        details_edit.setFixedHeight(90)
-        details_edit.setAcceptRichText(False)
-        dialog_layout.addWidget(details_edit)
-
-        # OK / Cancel buttons
-        button_box = QtWidgets.QDialogButtonBox(
-            QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel
-        )
-        button_box.accepted.connect(dialog.accept)
-        button_box.rejected.connect(dialog.reject)
-        dialog_layout.addWidget(button_box)
-
-        if dialog.exec_() == QtWidgets.QDialog.Accepted:
-            new_title: str = title_edit.text().strip()
-            new_details: str = details_edit.toPlainText().strip()
-            # Require a non-empty title before accepting the edit
-            if new_title:
-                self.update_content(new_title, new_details)
-                self.section_edited.emit(new_title, new_details)
+        The internal title is always kept in sync with the body text so the
+        markdown outline reconstruction always has a meaningful heading.
+        """
+        current_details: str = self._details_edit.toPlainText().strip()
+        # Keep the internal title derived from whatever the user has typed
+        self._title = _title_from_body(current_details) if current_details else ""
+        self.section_edited.emit(self._title, current_details)
 
     def update_content(self, title: str, details: str) -> None:
-        """Update the display labels with new title and details text.
+        """Update the stored title and visible details text.
 
         Args:
-            title: New section title (must be non-empty).
-            details: New section detail text; hides the details label when empty.
+            title: New section title (stored internally for markdown; not displayed).
+            details: New section detail text.
         """
-        self._title_label.setText(title)
-        if details:
-            self._details_label.setText(details)
-            self._details_label.show()
-        else:
-            self._details_label.hide()
-        # Let the layout recalculate the preferred size for this widget
+        self._title = title
+        # Block signals to avoid triggering _on_text_changed while setting the text
+        self._details_edit.blockSignals(True)
+        self._details_edit.setPlainText(details)
+        self._details_edit.blockSignals(False)
         self.updateGeometry()
 
     def set_status(self, status: str) -> None:
@@ -347,8 +321,8 @@ class OutlineSectionRow(QtWidgets.QWidget):
     def heightForWidth(self, width: int) -> int:  # noqa: N802
         """Calculate the correct wrapped height for the given widget width.
 
-        QLabel.sizeHint() always returns the one-line height even for word-wrapped
-        labels.  Using heightForWidth() on each label gives the true wrapped height.
+        Uses QFontMetrics.boundingRect() with word-wrap to estimate the text height
+        for the inline QPlainTextEdit without triggering recursive layout updates.
 
         Args:
             width: The widget width to measure against.
@@ -361,31 +335,22 @@ class OutlineSectionRow(QtWidgets.QWidget):
         spacing: int = h_layout.spacing()
 
         # Sum up fixed-width items that eat into the text column:
-        #   left-margin + status-button + spacing + spacing + edit-button + right-margin
+        #   left-margin + status-button + spacing + spacing + delete-button + right-margin
         fixed_w: int = margins.left() + margins.right()
         fixed_w += 28 + spacing  # status button + gap
-        fixed_w += spacing + 24  # gap + edit button
-        fixed_w += spacing + 24  # gap + delete button (always visible)
+        fixed_w += spacing + 24  # gap + delete button
 
         text_w: int = max(1, width - fixed_w)
 
-        # Title height (wrapped)
-        title_h: int = self._title_label.heightForWidth(text_w)
-        if title_h < 0:
-            title_h = self._title_label.sizeHint().height()
+        # Measure wrapped text height via font metrics (safe: does not touch the doc layout)
+        fm: QtGui.QFontMetrics = self._details_edit.fontMetrics()
+        text: str = self._details_edit.toPlainText() or " "
+        text_h: int = (
+            fm.boundingRect(0, 0, text_w, 10000, QtCore.Qt.TextWordWrap, text).height()
+            + 8  # QPlainTextEdit top/bottom internal padding
+        )
 
-        # Details height (wrapped), only when visible
-        details_h: int = 0
-        if self._details_label.isVisible():
-            dh: int = self._details_label.heightForWidth(text_w)
-            if dh < 0:
-                dh = self._details_label.sizeHint().height()
-            # Add the VBoxLayout spacing between title and details
-            details_h = dh + self._text_layout.spacing()
-
-        text_h: int = title_h + details_h
-
-        # Ensure the row is tall enough for the fixed-size buttons (24 px each)
+        # Ensure the row is tall enough for the fixed-size delete button (24 px)
         min_button_h: int = 24
         return max(text_h, min_button_h) + margins.top() + margins.bottom()
 
@@ -688,46 +653,14 @@ class OutlineTrackerWidget(QtWidgets.QWidget):
         self.section_deleted.emit(index)
 
     def _on_add_section_clicked(self) -> None:
-        """Open a dialog so the user can create a new outline section."""
-        dialog = QtWidgets.QDialog(self)
-        dialog.setWindowTitle("Add Section")
-        dialog.setMinimumWidth(420)
-        dialog.setStyleSheet(_EDIT_DIALOG_STYLE)
-
-        dialog_layout = QtWidgets.QVBoxLayout(dialog)
-        dialog_layout.setSpacing(8)
-        dialog_layout.setContentsMargins(12, 12, 12, 12)
-
-        # Title input field
-        title_label = QtWidgets.QLabel("Title:")
-        dialog_layout.addWidget(title_label)
-        title_edit = QtWidgets.QLineEdit()
-        title_edit.setPlaceholderText("Enter section title...")
-        dialog_layout.addWidget(title_edit)
-
-        # Optional details field
-        details_label = QtWidgets.QLabel("Details (optional):")
-        dialog_layout.addWidget(details_label)
-        details_edit = QtWidgets.QTextEdit()
-        details_edit.setPlaceholderText("Enter section description or details...")
-        details_edit.setFixedHeight(90)
-        details_edit.setAcceptRichText(False)
-        dialog_layout.addWidget(details_edit)
-
-        # OK / Cancel buttons
-        button_box = QtWidgets.QDialogButtonBox(
-            QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel
-        )
-        button_box.accepted.connect(dialog.accept)
-        button_box.rejected.connect(dialog.reject)
-        dialog_layout.addWidget(button_box)
-
-        if dialog.exec_() == QtWidgets.QDialog.Accepted:
-            new_title: str = title_edit.text().strip()
-            new_details: str = details_edit.toPlainText().strip()
-            # Require a non-empty title before adding
-            if new_title:
-                self.add_section(new_title, new_details)
+        """Immediately add an empty section row and move focus to its text field."""
+        # Add a placeholder section and let the user type directly in the row
+        self.add_section("", "")
+        # Focus the newly created row's text edit so the user can type right away
+        if self._row_widgets:
+            new_row: OutlineSectionRow = self._row_widgets[-1]
+            self._list.scrollToBottom()
+            QtCore.QTimer.singleShot(0, new_row._details_edit.setFocus)
 
     def add_section(self, title: str, details: str) -> None:
         """Append a new pending section to the tracker and emit section_added.
